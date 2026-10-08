@@ -17,32 +17,22 @@ export async function GET(_request: Request, { params }: { params: { token: stri
         where: {
           archivedAt: null,
           visibility: "CLIENT_VISIBLE",
-          clientShares: { some: { shareLinkId: share.id } },
         },
         orderBy: { position: "asc" },
         select: {
           id: true,
           title: true,
           description: true,
-          clientShares: {
-            where: { shareLinkId: share.id },
-            select: { approvalStatus: true, revisionRound: true },
-            take: 1,
-          },
+          approvalStatus: true,
+          revisionRound: true,
           createdAt: true,
           attachments: {
-            where: {
-              isCurrentVersion: true,
-              OR: [{ clientKey: `link:${share.id}` }, { sharedWithAllClients: true }],
-            },
+            where: { isCurrentVersion: true },
             orderBy: { createdAt: "asc" },
             select: { id: true, type: true, name: true, sizeBytes: true, mimeType: true, url: true },
           },
           comments: {
-            where: {
-              visibility: "CLIENT",
-              OR: [{ clientKey: `link:${share.id}` }, { sharedWithAllClients: true }],
-            },
+            where: { visibility: "CLIENT" },
             orderBy: { createdAt: "asc" },
             select: {
               id: true,
@@ -64,9 +54,6 @@ export async function GET(_request: Request, { params }: { params: { token: stri
       title: list.title,
       cards: list.cards.map((card) => ({
         ...card,
-        approvalStatus: card.clientShares[0]?.approvalStatus ?? "NONE",
-        revisionRound: card.clientShares[0]?.revisionRound ?? 0,
-        clientShares: undefined,
         attachments: card.attachments.map((attachment) => ({
           ...attachment,
           url: attachment.type === "LINK"
@@ -75,7 +62,7 @@ export async function GET(_request: Request, { params }: { params: { token: stri
         })),
         comments: card.comments.map((comment) => ({
           ...comment,
-          authorName: "Client",
+          authorName: comment.author?.name ?? comment.authorLabel ?? "Client",
           author: undefined,
         })),
       })),

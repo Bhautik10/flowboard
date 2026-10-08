@@ -4,73 +4,15 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { AttachmentValidationError, deleteStoredAttachment, isUploadFile, validateAndStoreFile } from "@/lib/storage";
 import { canEditContent } from "@/lib/workspaces";
-import { getCardActorAccess, isCardActorResponse, type CardActorAccess } from "@/lib/client-card-access";
-import { clientItemScopeSchema } from "@/lib/validations/agency";
-import { notifyCardSubscribers, notifyUsers } from "@/lib/notifications";
+import { getCardActorAccess, isCardActorResponse } from "@/lib/client-card-access";
+import { notifyCardSubscribers } from "@/lib/notifications";
 
 const linkSchema = z.object({
   url: z.string().trim().url().max(2048).refine((value) => /^https?:\/\//i.test(value)),
   name: z.string().trim().min(1).max(120),
-  clientKey: z.string().min(1).max(200).nullable().optional(),
-  sharedWithAllClients: z.boolean().optional(),
 }).strict();
 
 type Context = { params: { cardId: string } };
-
-async function itemScope(cardId: string, access: CardActorAccess, value: unknown) {
-  if (access.role === "CLIENT") {
-    return { clientKey: access.clientKey, sharedWithAllClients: false };
-  }
-  const parsed = clientItemScopeSchema.safeParse(value ?? {});
-  if (!parsed.success) return null;
-  const clientKey = parsed.data.clientKey ?? null;
-  const sharedWithAllClients = parsed.data.sharedWithAllClients === true;
-  if (clientKey) {
-    const assigned = await prisma.cardClient.findUnique({
-      where: { cardId_clientKey: { cardId, clientKey } },
-      select: { id: true },
-    });
-    if (!assigned) return null;
-  }
-  return { clientKey: sharedWithAllClients ? null : clientKey, sharedWithAllClients };
-}
-
-async function notifyAttachmentAudience(
-  cardId: string,
-  access: CardActorAccess,
-  scope: { clientKey: string | null; sharedWithAllClients: boolean },
-  name: string,
-) {
-  if (access.role === "CLIENT") {
-    await notifyCardSubscribers({
-      cardId,
-      actorId: access.userId,
-      eventType: "COMMENT",
-      title: "Client uploaded a file",
-      body: "A client uploaded a file to a shared card.",
-      clientVisibleActivity: true,
-    });
-    return;
-  }
-  if (!scope.clientKey && !scope.sharedWithAllClients) return;
-  const recipients = await prisma.cardClient.findMany({
-    where: {
-      cardId,
-      userId: { not: null },
-      ...(scope.sharedWithAllClients ? {} : { clientKey: scope.clientKey! }),
-    },
-    select: { userId: true },
-  });
-  await notifyUsers({
-    cardId,
-    actorId: access.userId,
-    recipientIds: recipients.flatMap(({ userId }) => userId ? [userId] : []),
-    eventType: "COMMENT",
-    title: "Team member shared an attachment",
-    body: `A team member shared ${name} with you.`,
-    clientVisibleActivity: true,
-  });
-}
 
 export async function POST(request: Request, { params }: Context) {
   try {
@@ -92,17 +34,6 @@ export async function POST(request: Request, { params }: Context) {
       const form = await request.formData().catch(() => null);
       const file = form?.get("file");
       if (!isUploadFile(file)) return NextResponse.json({ error: "Choose an image or PDF" }, { status: 400 });
-      const scopeValue = form?.get("clientScope");
-      let scopePayload: unknown = {};
-      if (scopeValue) {
-        try {
-          scopePayload = JSON.parse(String(scopeValue));
-        } catch {
-          return NextResponse.json({ error: "Invalid client visibility settings" }, { status: 400 });
-        }
-      }
-      const scope = await itemScope(card.id, access, scopePayload);
-      if (!scope) return NextResponse.json({ error: "Choose a client assigned to this card" }, { status: 400 });
       let stored;
       try {
         stored = await validateAndStoreFile(file);
@@ -122,8 +53,6 @@ export async function POST(request: Request, { params }: Context) {
               url: stored.key,
               mimeType: stored.mimeType,
               sizeBytes: stored.sizeBytes,
-              clientKey: scope.clientKey,
-              sharedWithAllClients: scope.sharedWithAllClients,
             },
           });
           await tx.activity.create({
@@ -135,15 +64,20 @@ export async function POST(request: Request, { params }: Context) {
               entityType: "CARD",
               entityId: card.id,
               action: "ATTACHMENT_ADDED",
-              clientKey: scope.clientKey,
-              sharedWithAllClients: scope.sharedWithAllClients,
               metadata: { attachmentId: created.id, name: created.name, type: created.type },
             },
           });
           return created;
         });
         try {
-          await notifyAttachmentAudience(card.id, access, scope, attachment.name);
+          await notifyCardSubscribers({
+            cardId: card.id,
+            actorId: access.userId,
+            eventType: "COMMENT",
+            title: access.role === "CLIENT" ? "Client uploaded a file" : "New attachment",
+            body: "A file was added to a card.",
+            clientVisibleActivity: access.role === "CLIENT",
+          });
         } catch (error) {
           console.error("[attachments/create] Attachment saved but notifications failed", { cardId: card.id, error });
         }
@@ -164,8 +98,6 @@ export async function POST(request: Request, { params }: Context) {
     const rawBody = await request.json().catch(() => null);
     const parsed = linkSchema.safeParse(rawBody);
     if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
-    const scope = await itemScope(card.id, access, parsed.data);
-    if (!scope) return NextResponse.json({ error: "Choose a client assigned to this card" }, { status: 400 });
     const attachment = await prisma.$transaction(async (tx) => {
       const created = await tx.attachment.create({
         data: {
@@ -175,8 +107,6 @@ export async function POST(request: Request, { params }: Context) {
           name: parsed.data.name,
           url: parsed.data.url,
           mimeType: "text/uri-list",
-          clientKey: scope.clientKey,
-          sharedWithAllClients: scope.sharedWithAllClients,
         },
       });
       await tx.activity.create({
@@ -188,15 +118,20 @@ export async function POST(request: Request, { params }: Context) {
           entityType: "CARD",
           entityId: card.id,
           action: "ATTACHMENT_LINK_ADDED",
-          clientKey: scope.clientKey,
-          sharedWithAllClients: scope.sharedWithAllClients,
           metadata: { attachmentId: created.id, name: created.name },
         },
       });
       return created;
     });
     try {
-      await notifyAttachmentAudience(card.id, access, scope, attachment.name);
+      await notifyCardSubscribers({
+        cardId: card.id,
+        actorId: access.userId,
+        eventType: "COMMENT",
+        title: "New attachment",
+        body: "A link was added to a card.",
+        clientVisibleActivity: access.role === "CLIENT",
+      });
     } catch (error) {
       console.error("[attachments/create] Attachment link saved but notifications failed", { cardId: card.id, error });
     }

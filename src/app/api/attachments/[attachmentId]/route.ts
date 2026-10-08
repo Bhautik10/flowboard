@@ -8,7 +8,7 @@ type Context = { params: { attachmentId: string } };
 async function authorizedAttachment(attachmentId: string) {
   const attachment = await prisma.attachment.findUnique({
     where: { id: attachmentId },
-    select: { id: true, cardId: true, type: true, url: true, isCover: true, name: true, clientKey: true, sharedWithAllClients: true },
+    select: { id: true, cardId: true, type: true, url: true, isCover: true, name: true },
   });
   if (!attachment) return { response: NextResponse.json({ error: "Attachment not found" }, { status: 404 }) };
   const card = await prisma.card.findUnique({
@@ -18,16 +18,8 @@ async function authorizedAttachment(attachmentId: string) {
   if (!card) return { response: NextResponse.json({ error: "Attachment not found" }, { status: 404 }) };
   const access = await getBoardAccess(card.boardId);
   if (isResponse(access)) return { response: access };
-  if (access.role === "CLIENT") {
-    const assignment = await prisma.cardClient.findUnique({
-      where: { cardId_clientKey: { cardId: attachment.cardId, clientKey: `user:${access.userId}` } },
-      select: { id: true },
-    });
-    if (
-      !assignment ||
-      card.visibility !== "CLIENT_VISIBLE" ||
-      (attachment.clientKey !== `user:${access.userId}` && !attachment.sharedWithAllClients)
-    ) return { response: NextResponse.json({ error: "Attachment not found" }, { status: 404 }) };
+  if (access.role === "CLIENT" && card.visibility !== "CLIENT_VISIBLE") {
+    return { response: NextResponse.json({ error: "Attachment not found" }, { status: 404 }) };
   }
   return { attachment, card, access };
 }

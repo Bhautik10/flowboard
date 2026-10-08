@@ -53,33 +53,10 @@ export async function POST(request: Request, { params }: Context) {
           tokenHash: hashClientShareToken(token),
           clientName: parsed.data.clientName,
           clientEmail: parsed.data.clientEmail?.toLowerCase(),
-          clientUserId: parsed.data.clientEmail
-            ? (await tx.user.findUnique({
-                where: { email: parsed.data.clientEmail.toLowerCase() },
-                select: { id: true },
-              }))?.id ?? null
-            : null,
           expiresAt: parsed.data.expiresAt ? new Date(parsed.data.expiresAt) : null,
         },
         select: { id: true, clientName: true, clientEmail: true, expiresAt: true, revokedAt: true, createdAt: true },
       });
-      const visibleCards = await tx.card.findMany({
-        where: { boardId: params.boardId, visibility: "CLIENT_VISIBLE", archivedAt: null },
-        select: { id: true, approvalStatus: true, revisionRound: true },
-      });
-      if (visibleCards.length) {
-        await tx.cardClient.createMany({
-          data: visibleCards.map((card) => ({
-            cardId: card.id,
-            clientKey: `link:${created.id}`,
-            shareLinkId: created.id,
-            approvalStatus: card.approvalStatus,
-            revisionRound: card.revisionRound,
-            approvedAt: card.approvalStatus === "APPROVED" ? new Date() : null,
-          })),
-          skipDuplicates: true,
-        });
-      }
       await tx.activity.create({
         data: {
           boardId: params.boardId,

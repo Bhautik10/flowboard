@@ -12,15 +12,12 @@ export async function GET(request: Request, { params }: { params: { cardId: stri
     const sinceParsed = sinceSchema.safeParse(new URL(request.url).searchParams.get("since") ?? undefined);
     if (!sinceParsed.success) return NextResponse.json({ error: "Invalid update cursor" }, { status: 400 });
     const since = sinceParsed.data ? new Date(sinceParsed.data) : new Date(0);
-    const scope = access.role === "CLIENT" && access.clientKey
-      ? { OR: [{ clientKey: access.clientKey }, { sharedWithAllClients: true }] }
-      : {};
-    const [comments, attachments, activities, approvals] = await Promise.all([
+    const [comments, attachments, activities] = await Promise.all([
       prisma.comment.findMany({
         where: {
           cardId: params.cardId,
           updatedAt: { gt: since },
-          ...(access.role === "CLIENT" ? { visibility: "CLIENT", ...scope } : {}),
+          ...(access.role === "CLIENT" ? { visibility: "CLIENT" } : {}),
         },
         orderBy: { createdAt: "asc" },
         include: {
@@ -33,7 +30,6 @@ export async function GET(request: Request, { params }: { params: { cardId: stri
           cardId: params.cardId,
           createdAt: { gt: since },
           isCurrentVersion: true,
-          ...(access.role === "CLIENT" ? scope : {}),
         },
         orderBy: { createdAt: "asc" },
         include: { uploadedBy: { select: { id: true, name: true, image: true } } },
@@ -42,19 +38,9 @@ export async function GET(request: Request, { params }: { params: { cardId: stri
         where: {
           cardId: params.cardId,
           createdAt: { gt: since },
-          ...(access.role === "CLIENT" ? scope : {}),
         },
         orderBy: { createdAt: "desc" },
         include: { actor: { select: { id: true, name: true, image: true } } },
-      }),
-      prisma.cardClient.findMany({
-        where: {
-          cardId: params.cardId,
-          ...(access.role === "CLIENT" && access.clientKey ? { clientKey: access.clientKey } : {}),
-          ...(sinceParsed.data ? { updatedAt: { gt: since } } : {}),
-        },
-        orderBy: { createdAt: "asc" },
-        include: { user: { select: { id: true, name: true, email: true, image: true } } },
       }),
     ]);
     return NextResponse.json({
@@ -66,7 +52,6 @@ export async function GET(request: Request, { params }: { params: { cardId: stri
           : `/api/attachments/${attachment.id}/file${access.shareToken ? `?share=${access.shareToken}` : ""}`,
       })),
       activities,
-      clientShares: approvals,
       serverTime: new Date().toISOString(),
     });
   } catch (error) {

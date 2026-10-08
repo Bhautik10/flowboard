@@ -171,7 +171,6 @@ model User {
   templatesCreated    Template[]
   clientSharesCreated ClientShareLink[] @relation("ClientShareCreator")
   designPins          DesignPin[]
-  clientCardShares    CardClient[] @relation("ClientCardShare")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -408,7 +407,6 @@ model Card {
   activities   Activity[]
   customValues CustomFieldValue[]
   timeEntries  TimeEntry[]
-  clientShares  CardClient[]
   blocking     CardDependency[]   @relation("Blocking")
   blockedBy    CardDependency[]   @relation("BlockedBy")
 
@@ -477,28 +475,6 @@ model CardWatcher {
   @@index([userId])
 }
 
-model CardClient {
-  id             String            @id @default(cuid())
-  cardId         String
-  clientKey      String
-  userId         String?
-  shareLinkId    String?
-  approvalStatus CardApprovalStatus @default(NONE)
-  revisionRound  Int               @default(0)
-  approvalNote   String?           @db.Text
-  approvedAt     DateTime?
-  card           Card              @relation(fields: [cardId], references: [id], onDelete: Cascade)
-  user           User?             @relation("ClientCardShare", fields: [userId], references: [id], onDelete: Cascade)
-  shareLink      ClientShareLink?  @relation(fields: [shareLinkId], references: [id], onDelete: Cascade)
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
-
-  @@unique([cardId, clientKey])
-  @@index([clientKey, cardId])
-  @@index([userId])
-  @@index([shareLinkId])
-}
-
 // ─── Checklists ──────────────────────────────────────────────────────────────
 
 model Checklist {
@@ -541,8 +517,6 @@ model Comment {
   authorLabel String?
   body        String            @db.Text
   visibility  CommentVisibility @default(INTERNAL)
-  clientKey   String?
-  sharedWithAllClients Boolean @default(false)
 
   card      Card              @relation(fields: [cardId], references: [id], onDelete: Cascade)
   author    User?             @relation(fields: [authorId], references: [id], onDelete: SetNull)
@@ -583,8 +557,6 @@ model Attachment {
   versionGroupId   String?
   versionNumber    Int            @default(1)
   isCurrentVersion Boolean        @default(true)
-  clientKey        String?
-  sharedWithAllClients Boolean    @default(false)
 
   card       Card        @relation(fields: [cardId], references: [id], onDelete: Cascade)
   uploadedBy User?       @relation("UploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
@@ -603,13 +575,11 @@ model ClientShareLink {
   tokenHash   String    @unique
   clientName  String?
   clientEmail String?
-  clientUserId String?
   expiresAt   DateTime?
   revokedAt   DateTime?
 
   board     Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
   createdBy User  @relation("ClientShareCreator", fields: [createdById], references: [id], onDelete: Cascade)
-  cardAssignments CardClient[]
 
   createdAt DateTime @default(now())
 
@@ -626,8 +596,6 @@ model DesignPin {
   x           Float
   y           Float
   resolvedAt  DateTime?
-  clientKey   String?
-  sharedWithAllClients Boolean @default(false)
 
   attachment Attachment @relation(fields: [attachmentId], references: [id], onDelete: Cascade)
   author     User?      @relation(fields: [authorId], references: [id], onDelete: SetNull)
@@ -650,8 +618,6 @@ model Activity {
   entityId   String
   action     String
   metadata   Json?
-  clientKey String?
-  sharedWithAllClients Boolean @default(false)
 
   board Board? @relation(fields: [boardId], references: [id], onDelete: Cascade)
   card  Card?  @relation(fields: [cardId], references: [id], onDelete: Cascade)

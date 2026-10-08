@@ -20,20 +20,18 @@ export async function POST(request: Request, { params }: { params: { cardId: str
     }
     const card = await prisma.card.findUnique({
       where: { id: params.cardId },
-      select: { id: true, boardId: true, title: true },
+      select: { id: true, boardId: true, title: true, approvalStatus: true, revisionRound: true },
     });
     if (!card) return NextResponse.json({ error: "Card not found" }, { status: 404 });
 
     if (parsed.data.action === "send") {
-      const assigned = await prisma.cardClient.findMany({
-        where: { cardId: card.id },
-        select: { clientKey: true },
-      });
-      if (!assigned.length) return NextResponse.json({ error: "Share this card with at least one client first" }, { status: 409 });
       await prisma.$transaction(async (tx) => {
-        await tx.cardClient.updateMany({
-          where: { cardId: card.id },
-          data: { approvalStatus: "PENDING", revisionRound: 1, approvalNote: null, approvedAt: null },
+        await tx.card.update({
+          where: { id: card.id },
+          data: {
+            approvalStatus: "PENDING",
+            revisionRound: card.revisionRound < 1 ? 1 : card.revisionRound,
+          },
         });
         await tx.activity.create({
           data: {
@@ -43,39 +41,28 @@ export async function POST(request: Request, { params }: { params: { cardId: str
             entityType: "CARD",
             entityId: card.id,
             action: "CARD_SENT_FOR_APPROVAL",
-            sharedWithAllClients: true,
-            metadata: { clientKeys: assigned.map(({ clientKey }) => clientKey) },
           },
         });
       });
-      try {
-        await notifyApprovalClients({ cardId: card.id, actorId: access.userId! });
-      } catch (error) {
-        console.error("[approval/send] Approval was sent but client notifications failed", { cardId: card.id, error });
+      if (access.userId) {
+        try {
+          await notifyApprovalClients({ cardId: card.id, actorId: access.userId });
+        } catch (error) {
+          console.error("[approval/send] Approval was sent but client notifications failed", { cardId: card.id, error });
+        }
       }
-      return NextResponse.json({ sent: assigned.length });
+      return NextResponse.json({ sent: true });
     }
 
-    if (!access.clientKey) return NextResponse.json({ error: "Client assignment is required" }, { status: 404 });
-    const approval = await prisma.cardClient.findUnique({
-      where: { cardId_clientKey: { cardId: card.id, clientKey: access.clientKey } },
-      select: { approvalStatus: true, revisionRound: true },
-    });
-    if (!approval) return NextResponse.json({ error: "Card not found" }, { status: 404 });
-    if (approval.approvalStatus !== "PENDING") {
+    if (card.approvalStatus !== "PENDING") {
       return NextResponse.json({ error: "This card is not awaiting your approval" }, { status: 409 });
     }
     const nextStatus = parsed.data.action === "approve" ? "APPROVED" : "CHANGES_REQUESTED";
-    const revisionRound = parsed.data.action === "request-changes" ? approval.revisionRound + 1 : approval.revisionRound;
+    const revisionRound = parsed.data.action === "request-changes" ? card.revisionRound + 1 : card.revisionRound;
     await prisma.$transaction(async (tx) => {
-      await tx.cardClient.update({
-        where: { cardId_clientKey: { cardId: card.id, clientKey: access.clientKey! } },
-        data: {
-          approvalStatus: nextStatus,
-          revisionRound,
-          approvalNote: parsed.data.action === "request-changes" ? parsed.data.body : null,
-          approvedAt: parsed.data.action === "approve" ? new Date() : null,
-        },
+      await tx.card.update({
+        where: { id: card.id },
+        data: { approvalStatus: nextStatus, revisionRound },
       });
       if (parsed.data.action === "request-changes") {
         const comment = await tx.comment.create({
@@ -85,7 +72,6 @@ export async function POST(request: Request, { params }: { params: { cardId: str
             authorLabel: access.actorLabel,
             body: parsed.data.body,
             visibility: "CLIENT",
-            clientKey: access.clientKey,
           },
         });
         await tx.activity.create({
@@ -97,7 +83,6 @@ export async function POST(request: Request, { params }: { params: { cardId: str
             entityType: "COMMENT",
             entityId: comment.id,
             action: "COMMENT_ADDED",
-            clientKey: access.clientKey,
             metadata: { commentId: comment.id, reason: "CHANGES_REQUESTED" },
           },
         });
@@ -111,7 +96,6 @@ export async function POST(request: Request, { params }: { params: { cardId: str
           entityType: "CARD",
           entityId: card.id,
           action: parsed.data.action === "approve" ? "CLIENT_APPROVED" : "CLIENT_CHANGES_REQUESTED",
-          clientKey: access.clientKey,
           metadata: { status: nextStatus, revisionRound },
         },
       });
@@ -126,9 +110,13 @@ export async function POST(request: Request, { params }: { params: { cardId: str
     } catch (error) {
       console.error("[approval/client] Client response saved but team notification failed", { cardId: card.id, error });
     }
-    return NextResponse.json({ approvalStatus: nextStatus, revisionRound, note: parsed.data.action === "request-changes" ? parsed.data.body : null });
+    return NextResponse.json({
+      approvalStatus: nextStatus,
+      revisionRound,
+      note: parsed.data.action === "request-changes" ? parsed.data.body : null,
+    });
   } catch (error) {
-    console.error("[approval] Could not update per-client card approval", { cardId: params.cardId, error });
+    console.error("[approval] Could not update card approval", { cardId: params.cardId, error });
     return NextResponse.json({ error: error instanceof Error ? error.message : "Could not update approval" }, { status: 500 });
   }
 }

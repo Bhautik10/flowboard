@@ -22,18 +22,6 @@ export async function POST(
     }
     const isClient = access.role === "CLIENT";
     const visibleToClient = isClient || parsed.data.visibility === "CLIENT";
-    const allClients = !isClient && (
-      parsed.data.sharedWithAllClients === true ||
-      (parsed.data.visibility === "CLIENT" && !parsed.data.clientKey)
-    );
-    let scopedClientKey = isClient ? access.clientKey : parsed.data.clientKey ?? null;
-    if (!isClient && visibleToClient && !allClients && scopedClientKey) {
-      const assigned = await prisma.cardClient.findFirst({
-        where: { cardId: params.cardId, clientKey: scopedClientKey },
-        select: { id: true },
-      });
-      if (!assigned) return NextResponse.json({ error: "Choose a client assigned to this card" }, { status: 400 });
-    }
     const comment = await prisma.$transaction(async (tx) => {
       const created = await tx.comment.create({
         data: {
@@ -42,8 +30,6 @@ export async function POST(
           authorLabel: access.actorLabel,
           body: parsed.data.body,
           visibility: visibleToClient ? "CLIENT" : "INTERNAL",
-          clientKey: visibleToClient && !allClients ? scopedClientKey : null,
-          sharedWithAllClients: visibleToClient && allClients,
         },
         include: {
           author: { select: { id: true, name: true, image: true } },
@@ -55,12 +41,11 @@ export async function POST(
           boardId: access.board.id,
           cardId: params.cardId,
           actorId: access.userId,
+          actorLabel: access.actorLabel,
           entityType: "COMMENT",
           entityId: created.id,
           action: "COMMENT_ADDED",
-          clientKey: created.clientKey,
-          sharedWithAllClients: created.sharedWithAllClients,
-          metadata: { commentId: created.id, clientKey: created.clientKey, sharedWithAllClients: created.sharedWithAllClients },
+          metadata: { commentId: created.id },
         },
       });
       return created;
@@ -78,7 +63,7 @@ export async function POST(
         const recipients = await prisma.workspaceMember.findMany({
           where: {
             workspaceId: access.board.workspaceId,
-            userId: { not: access.userId },
+            userId: access.userId ? { not: access.userId } : undefined,
             role: { not: "CLIENT" },
           },
           select: { userId: true },
@@ -96,30 +81,7 @@ export async function POST(
     } catch (error) {
       console.error("[comments/create] Comment saved but notification delivery failed", { cardId: params.cardId, error });
     }
-    if (visibleToClient && !isClient) {
-      try {
-        const assignments = await prisma.cardClient.findMany({
-          where: {
-            cardId: params.cardId,
-            userId: { not: null },
-            ...(allClients ? {} : { clientKey: scopedClientKey! }),
-          },
-          select: { userId: true },
-        });
-        await notifyUsers({
-          cardId: params.cardId,
-          actorId: access.userId,
-          recipientIds: assignments.flatMap(({ userId }) => userId ? [userId] : []),
-          eventType: "COMMENT",
-          title: "Team member commented on a shared card",
-          body: "A team member added a client-visible comment.",
-          clientVisibleActivity: true,
-        });
-      } catch (error) {
-        console.error("[comments/create] Team comment saved but client notifications failed", { cardId: params.cardId, error });
-      }
-    }
-    if (!isClient) {
+    if (!isClient && access.userId) {
       try {
         await notifyMentionedMembers({
           text: comment.body,

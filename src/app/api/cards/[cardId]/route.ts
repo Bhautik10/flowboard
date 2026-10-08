@@ -8,7 +8,7 @@ import {
   isResponse,
 } from "@/lib/workspaces";
 import { updateCardDetailsSchema } from "@/lib/validations/card-details";
-import { clientItemVisibilityWhere, getCardActorAccess, isCardActorResponse } from "@/lib/client-card-access";
+import { getCardActorAccess, isCardActorResponse } from "@/lib/client-card-access";
 
 type Context = { params: { cardId: string } };
 
@@ -117,9 +117,6 @@ export async function PATCH(request: Request, { params }: Context) {
 export async function GET(request: Request, { params }: Context) {
   const access = await getCardActorAccess(params.cardId, request);
   if (isCardActorResponse(access)) return access;
-  const clientWhere = access.role === "CLIENT" && access.clientKey
-    ? clientItemVisibilityWhere(access.clientKey)
-    : undefined;
   const card = await prisma.card.findUnique({
     where: { id: params.cardId },
     include: {
@@ -140,19 +137,14 @@ export async function GET(request: Request, { params }: Context) {
       },
       watchers: { select: { userId: true } },
       attachments: {
-        where: {
-          isCurrentVersion: true,
-          ...(access.role === "CLIENT" && clientWhere ? clientWhere : {}),
-        },
+        where: { isCurrentVersion: true },
         orderBy: { createdAt: "asc" },
         include: {
           uploadedBy: { select: { id: true, name: true, image: true } },
         },
       },
       comments: {
-        where: access.role === "CLIENT"
-          ? { visibility: "CLIENT", ...(clientWhere ?? {}) }
-          : undefined,
+        where: access.role === "CLIENT" ? { visibility: "CLIENT" } : undefined,
         orderBy: { createdAt: "asc" },
         take: 100,
         include: {
@@ -164,29 +156,17 @@ export async function GET(request: Request, { params }: Context) {
         },
       },
       activities: {
-        where: access.role === "CLIENT"
-          ? { OR: [
-              { sharedWithAllClients: true },
-              ...(access.clientKey ? [{ clientKey: access.clientKey }] : []),
-            ] }
-          : undefined,
         orderBy: { createdAt: "desc" },
         take: 50,
         include: { actor: { select: { id: true, name: true, image: true } } },
       },
       list: { select: { id: true, title: true } },
-      clientShares: {
-        ...(access.role === "CLIENT" && access.clientKey ? { where: { clientKey: access.clientKey } } : {}),
-        include: { user: { select: { id: true, name: true, email: true, image: true } } },
-        orderBy: { createdAt: "asc" },
-      },
     },
   });
   if (!card || (access.role === "CLIENT" && card.visibility !== "CLIENT_VISIBLE")) {
     return NextResponse.json({ error: "Card not found" }, { status: 404 });
   }
   if (access.role === "CLIENT") {
-    const clientApproval = card.clientShares[0];
     return NextResponse.json({
       card: {
         id: card.id,
@@ -194,8 +174,8 @@ export async function GET(request: Request, { params }: Context) {
         title: card.title,
         description: card.description,
         visibility: card.visibility,
-        approvalStatus: clientApproval?.approvalStatus ?? "NONE",
-        revisionRound: clientApproval?.revisionRound ?? 0,
+        approvalStatus: card.approvalStatus,
+        revisionRound: card.revisionRound,
         priority: card.priority,
         startDate: null,
         dueDate: null,
@@ -209,7 +189,7 @@ export async function GET(request: Request, { params }: Context) {
         labels: [],
         members: [],
         checklists: [],
-        list: { id: "", title: "" },
+        list: card.list,
         createdAt: card.createdAt,
         attachments: card.attachments.map((attachment) => ({
           ...attachment,
@@ -220,19 +200,15 @@ export async function GET(request: Request, { params }: Context) {
         })),
         comments: card.comments.map((comment) => ({
           ...comment,
-          authorId: comment.clientKey === access.clientKey ? null : comment.authorId,
-          authorLabel: comment.clientKey === access.clientKey ? access.actorLabel ?? "Client" : comment.authorLabel,
           reactions: [],
         })),
         activities: card.activities,
-        clientShares: [],
       },
       boardMembers: [],
       clients: [],
       targetBoards: [],
       currentUserId: access.userId,
       role: access.role,
-      clientKey: access.clientKey,
     });
   }
   const boardMembers = await prisma.workspaceMember.findMany({
@@ -306,18 +282,8 @@ export async function GET(request: Request, { params }: Context) {
     boardMembers: boardMembers.map(({ user }) => user),
     targetBoards,
     clients: clients.map(({ user }) => user),
-    cardShares: card?.clientShares.map((share) => ({
-      clientKey: share.clientKey,
-      userId: share.userId,
-      shareLinkId: share.shareLinkId,
-      approvalStatus: share.approvalStatus,
-      revisionRound: share.revisionRound,
-      approvedAt: share.approvedAt,
-      user: share.user,
-    })) ?? [],
     currentUserId: access.userId,
     role: access.role,
-    clientKey: null,
   });
 }
 

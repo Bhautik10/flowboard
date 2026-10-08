@@ -9,9 +9,6 @@ export type CardActorAccess = {
   role: WorkspaceRole;
   board: { id: string; workspaceId: string; visibility: "PRIVATE" | "WORKSPACE" | "PUBLIC" };
   cardVisibility: "INTERNAL" | "CLIENT_VISIBLE";
-  clientKey: string | null;
-  clientUserId: string | null;
-  clientShareLinkId: string | null;
   actorLabel: string | null;
   shareToken: string | null;
 };
@@ -27,9 +24,8 @@ export async function getCardActorAccess(cardId: string, request: Request): Prom
         boardId: share.boardId,
         archivedAt: null,
         visibility: "CLIENT_VISIBLE",
-        clientShares: { some: { shareLinkId: share.id } },
       },
-      select: { id: true, boardId: true, visibility: true, list: { select: { board: { select: { id: true, workspaceId: true, visibility: true } } } } },
+      select: { visibility: true, list: { select: { board: { select: { id: true, workspaceId: true, visibility: true } } } } },
     });
     if (!card) return NextResponse.json({ error: "Card not found" }, { status: 404 });
     return {
@@ -37,9 +33,6 @@ export async function getCardActorAccess(cardId: string, request: Request): Prom
       role: WorkspaceRole.CLIENT,
       board: card.list.board,
       cardVisibility: card.visibility,
-      clientKey: `link:${share.id}`,
-      clientUserId: share.clientUserId,
-      clientShareLinkId: share.id,
       actorLabel: share.clientName ?? share.clientEmail ?? "Client",
       shareToken,
     };
@@ -47,26 +40,8 @@ export async function getCardActorAccess(cardId: string, request: Request): Prom
 
   const access = await getCardCommentAccess(cardId);
   if (isResponse(access)) return access;
-  if (access.role !== WorkspaceRole.CLIENT) {
-    return {
-      ...access,
-      clientKey: null,
-      clientUserId: null,
-      clientShareLinkId: null,
-      actorLabel: null,
-      shareToken: null,
-    };
-  }
-  const assignment = await prisma.cardClient.findUnique({
-    where: { cardId_clientKey: { cardId, clientKey: `user:${access.userId}` } },
-    select: { id: true },
-  });
-  if (!assignment) return NextResponse.json({ error: "Card not found" }, { status: 404 });
   return {
     ...access,
-    clientKey: `user:${access.userId}`,
-    clientUserId: access.userId,
-    clientShareLinkId: null,
     actorLabel: null,
     shareToken: null,
   };
@@ -74,22 +49,6 @@ export async function getCardActorAccess(cardId: string, request: Request): Prom
 
 export function isCardActorResponse(value: CardActorAccess | NextResponse): value is NextResponse {
   return value instanceof NextResponse;
-}
-
-export function clientItemVisibilityWhere(clientKey: string) {
-  return {
-    OR: [
-      { clientKey },
-      { sharedWithAllClients: true },
-    ],
-  };
-}
-
-export async function cardClientKeys(cardId: string) {
-  return prisma.cardClient.findMany({
-    where: { cardId },
-    select: { clientKey: true, userId: true, shareLinkId: true },
-  });
 }
 
 export function asWorkspaceAccess(access: CardActorAccess): WorkspaceAccess {

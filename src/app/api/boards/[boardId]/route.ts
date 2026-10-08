@@ -11,111 +11,77 @@ type Context = { params: { boardId: string } };
 
 export async function GET(_request: Request, { params }: Context) {
   try {
-  const access = await getBoardAccess(params.boardId);
-  if (isResponse(access)) return access;
-  const cardVisibilityFilter =
-    access.role === "CLIENT" ? { visibility: "CLIENT_VISIBLE" as const } : {};
-  const board = await prisma.board.findUnique({
-    where: { id: params.boardId },
-    include: {
-      workspace: { select: { id: true, name: true, slug: true } },
-      lists: {
-        where: {
-          archivedAt: null,
-          ...(access.role === "CLIENT"
-            ? {
-                cards: {
-                  some: {
-                    archivedAt: null,
-                    parentCardId: null,
-                    ...cardVisibilityFilter,
-                    clientShares: { some: { userId: access.userId } },
+    const access = await getBoardAccess(params.boardId);
+    if (isResponse(access)) return access;
+    const cardVisibilityFilter =
+      access.role === "CLIENT" ? { visibility: "CLIENT_VISIBLE" as const } : {};
+    const board = await prisma.board.findUnique({
+      where: { id: params.boardId },
+      include: {
+        workspace: { select: { id: true, name: true, slug: true } },
+        lists: {
+          where: { archivedAt: null },
+          orderBy: { position: "asc" },
+          include: {
+            cards: {
+              where: {
+                archivedAt: null,
+                parentCardId: null,
+                ...cardVisibilityFilter,
+              },
+              orderBy: { position: "asc" },
+              include: {
+                labels: { include: { label: true } },
+                members: {
+                  include: {
+                    user: { select: { id: true, name: true, image: true } },
                   },
                 },
-              }
-            : {}),
-        },
-        orderBy: { position: "asc" },
-        include: {
-          cards: {
-            where: {
-              archivedAt: null,
-              parentCardId: null,
-              ...cardVisibilityFilter,
-              ...(access.role === "CLIENT"
-                ? { clientShares: { some: { userId: access.userId } } }
-                : {}),
-            },
-            orderBy: { position: "asc" },
-            include: {
-              labels: { include: { label: true } },
-              members: {
-                include: {
-                  user: { select: { id: true, name: true, image: true } },
+                checklists: {
+                  include: { items: { select: { isComplete: true } } },
                 },
-              },
-              checklists: {
-                include: { items: { select: { isComplete: true } } },
-              },
-              attachments: {
-                where: { isCover: true, type: "IMAGE" },
-                select: { id: true },
-                take: 1,
-              },
-              _count: {
-                select: {
-                  attachments: {
-                    where: {
-                      isCurrentVersion: true,
-                      ...(access.role === "CLIENT"
-                        ? { OR: [{ clientKey: `user:${access.userId}` }, { sharedWithAllClients: true }] }
-                        : {}),
-                    },
+                attachments: {
+                  where: { isCover: true, type: "IMAGE" },
+                  select: { id: true },
+                  take: 1,
+                },
+                _count: {
+                  select: {
+                    attachments: { where: { isCurrentVersion: true } },
+                    comments: access.role === "CLIENT"
+                      ? { where: { visibility: "CLIENT" } }
+                      : true,
                   },
-                  comments: access.role === "CLIENT"
-                    ? { where: {
-                        visibility: "CLIENT",
-                        OR: [{ clientKey: `user:${access.userId}` }, { sharedWithAllClients: true }],
-                      } }
-                    : true,
                 },
-              },
-              clientShares: {
-                ...(access.role === "CLIENT" ? { where: { userId: access.userId } } : {}),
-                select: { userId: true, approvalStatus: true, revisionRound: true },
               },
             },
           },
         },
+        favorites: {
+          where: { userId: access.userId },
+          select: { id: true },
+        },
       },
-      favorites: {
-        where: { userId: access.userId },
-        select: { id: true },
-      },
-    },
-  });
-  if (!board) return NextResponse.json({ error: "Board not found" }, { status: 404 });
-  return NextResponse.json({
-    board: {
-      ...board,
-      lists: board.lists.map((list) => ({
-        ...list,
-        wipLimit: access.role === "CLIENT" ? null : list.wipLimit,
-        cards: list.cards.map((card) => ({
-          ...card,
-          estimatedHours: access.role === "CLIENT" ? null : card.estimatedHours,
-          clientShares: access.role === "CLIENT"
-            ? card.clientShares.map(({ approvalStatus, revisionRound }) => ({ approvalStatus, revisionRound }))
-            : card.clientShares,
-          labels: card.labels.map(({ label }) => label),
-          members: access.role === "CLIENT" ? [] : card.members.map(({ user }) => user),
+    });
+    if (!board) return NextResponse.json({ error: "Board not found" }, { status: 404 });
+    return NextResponse.json({
+      board: {
+        ...board,
+        lists: board.lists.map((list) => ({
+          ...list,
+          wipLimit: access.role === "CLIENT" ? null : list.wipLimit,
+          cards: list.cards.map((card) => ({
+            ...card,
+            estimatedHours: access.role === "CLIENT" ? null : card.estimatedHours,
+            labels: card.labels.map(({ label }) => label),
+            members: access.role === "CLIENT" ? [] : card.members.map(({ user }) => user),
+          })),
         })),
-      })),
-      isFavorite: board.favorites.length > 0,
-      favorites: undefined,
-    },
-    role: access.role,
-  });
+        isFavorite: board.favorites.length > 0,
+        favorites: undefined,
+      },
+      role: access.role,
+    });
   } catch (error) {
     console.error("[boards/get] Could not load board data", { boardId: params.boardId, error });
     return NextResponse.json(

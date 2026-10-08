@@ -14,14 +14,9 @@ async function sharedCard(token: string, cardId: string) {
   if (!share) return null;
   const card = await prisma.card.findFirst({
     where: { id: cardId, boardId: share.boardId, visibility: "CLIENT_VISIBLE", archivedAt: null },
-    select: { id: true, boardId: true, title: true },
+    select: { id: true, boardId: true, title: true, approvalStatus: true, revisionRound: true },
   });
-  if (!card) return null;
-  const assignment = await prisma.cardClient.findUnique({
-    where: { cardId_clientKey: { cardId, clientKey: `link:${share.id}` } },
-    select: { approvalStatus: true, revisionRound: true },
-  });
-  return assignment ? { share, card, assignment, clientKey: `link:${share.id}` } : null;
+  return card ? { share, card } : null;
 }
 
 async function notifyTeam(cardId: string, title: string, body: string) {
@@ -67,25 +62,21 @@ export async function POST(request: Request, { params }: Context) {
           const created = await tx.attachment.create({
             data: {
               cardId: result.card.id,
-              uploadedById: result.share.clientUserId,
               type: stored.type,
               name: stored.name,
               url: stored.key,
               mimeType: stored.mimeType,
               sizeBytes: stored.sizeBytes,
-              clientKey: result.clientKey,
             },
           });
           await tx.activity.create({
             data: {
               boardId: result.card.boardId,
               cardId: result.card.id,
-              actorId: result.share.clientUserId,
               actorLabel,
               entityType: "CARD",
               entityId: result.card.id,
               action: "ATTACHMENT_ADDED",
-              clientKey: result.clientKey,
               metadata: { attachmentId: created.id, name: created.name },
             },
           });
@@ -119,11 +110,9 @@ export async function POST(request: Request, { params }: Context) {
         const created = await tx.comment.create({
           data: {
             cardId: result.card.id,
-            authorId: result.share.clientUserId,
             authorLabel: actorLabel,
             body: parsed.data.body,
             visibility: "CLIENT",
-            clientKey: result.clientKey,
           },
           select: { id: true, body: true, createdAt: true, authorLabel: true },
         });
@@ -131,12 +120,10 @@ export async function POST(request: Request, { params }: Context) {
           data: {
             boardId: result.card.boardId,
             cardId: result.card.id,
-            actorId: result.share.clientUserId,
             actorLabel,
             entityType: "COMMENT",
             entityId: created.id,
             action: "COMMENT_ADDED",
-            clientKey: result.clientKey,
             metadata: { commentId: created.id },
           },
         });
@@ -150,33 +137,26 @@ export async function POST(request: Request, { params }: Context) {
       return NextResponse.json({ comment: { ...comment, authorName: actorLabel } }, { status: 201 });
     }
 
-    if (result.assignment.approvalStatus !== "PENDING") {
+    if (result.card.approvalStatus !== "PENDING") {
       return NextResponse.json({ error: "This card is not awaiting your approval" }, { status: 409 });
     }
     const nextStatus = parsed.data.action === "approve" ? "APPROVED" : "CHANGES_REQUESTED";
     const revisionRound = parsed.data.action === "request-changes"
-      ? result.assignment.revisionRound + 1
-      : result.assignment.revisionRound;
+      ? result.card.revisionRound + 1
+      : result.card.revisionRound;
     await prisma.$transaction(async (tx) => {
-      await tx.cardClient.update({
-        where: { cardId_clientKey: { cardId: result.card.id, clientKey: result.clientKey } },
-        data: {
-          approvalStatus: nextStatus,
-          revisionRound,
-          approvalNote: parsed.data.action === "request-changes" ? parsed.data.body : null,
-          approvedAt: parsed.data.action === "approve" ? new Date() : null,
-        },
+      await tx.card.update({
+        where: { id: result.card.id },
+        data: { approvalStatus: nextStatus, revisionRound },
       });
       await tx.activity.create({
         data: {
           boardId: result.card.boardId,
           cardId: result.card.id,
-          actorId: result.share.clientUserId,
           actorLabel,
           entityType: "CARD",
           entityId: result.card.id,
           action: parsed.data.action === "approve" ? "CLIENT_APPROVED" : "CLIENT_CHANGES_REQUESTED",
-          clientKey: result.clientKey,
           metadata: { status: nextStatus, revisionRound },
         },
       });
@@ -184,23 +164,19 @@ export async function POST(request: Request, { params }: Context) {
         const comment = await tx.comment.create({
           data: {
             cardId: result.card.id,
-            authorId: result.share.clientUserId,
             authorLabel: actorLabel,
             body: parsed.data.body,
             visibility: "CLIENT",
-            clientKey: result.clientKey,
           },
         });
         await tx.activity.create({
           data: {
             boardId: result.card.boardId,
             cardId: result.card.id,
-            actorId: result.share.clientUserId,
             actorLabel,
             entityType: "COMMENT",
             entityId: comment.id,
             action: "COMMENT_ADDED",
-            clientKey: result.clientKey,
             metadata: { commentId: comment.id, reason: "CHANGES_REQUESTED" },
           },
         });
