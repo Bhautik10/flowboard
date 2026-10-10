@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readBoardBackground } from "@/lib/storage";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -34,7 +34,7 @@ export async function GET(
     ? path.resolve(process.env.FLOWBOARD_BOARD_BACKGROUND_DIR)
     : path.join(process.cwd(), "uploads", "board-backgrounds");
   try {
-    const image = await readFile(path.join(directory, path.basename(fileName.data)));
+    const image = await readBoardBackground(fileName.data, path.join(directory, path.basename(fileName.data)));
     return new NextResponse(image, {
       headers: {
         "Content-Type": contentTypes[path.extname(fileName.data)],

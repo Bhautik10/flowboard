@@ -100,10 +100,6 @@ export async function notifyUsers(input: NotifyInput) {
   const boardClientIds = new Set(card.list.board.members
     .filter((member) => member.role === "CLIENT")
     .map((member) => member.userId));
-  const assignedClientIds = new Set((await prisma.cardClient.findMany({
-    where: { cardId: card.id, userId: { in: Array.from(new Set([...boardClientIds, ...input.recipientIds])) } },
-    select: { userId: true },
-  })).flatMap(({ userId }) => userId ? [userId] : []));
   const allowedRecipients = new Set(
     card.list.board.workspace.members
       .filter((member) => member.userId !== input.actorId)
@@ -112,8 +108,7 @@ export async function notifyUsers(input: NotifyInput) {
         return !isClient || (
           input.clientVisibleActivity === true &&
           card.visibility === "CLIENT_VISIBLE" &&
-          boardClientIds.has(member.userId) &&
-          assignedClientIds.has(member.userId)
+          boardClientIds.has(member.userId)
         );
       })
       .map((member) => member.userId),
@@ -219,7 +214,16 @@ export async function notifyApprovalClients({
     select: {
       title: true,
       visibility: true,
-      clientShares: { where: { userId: { not: null } }, select: { userId: true } },
+      list: {
+        select: {
+          board: {
+            select: {
+              members: { where: { role: "CLIENT" }, select: { userId: true } },
+              workspace: { select: { members: { where: { role: "CLIENT" }, select: { userId: true } } } },
+            },
+          },
+        },
+      },
     },
   });
   if (!card || card.visibility !== "CLIENT_VISIBLE") return;
@@ -230,7 +234,10 @@ export async function notifyApprovalClients({
     title: "Approval requested",
     body: `"${card.title}" is ready for your review.`,
     clientVisibleActivity: true,
-    recipientIds: card.clientShares.flatMap(({ userId }) => userId ? [userId] : []),
+    recipientIds: Array.from(new Set([
+      ...card.list.board.workspace.members.map(({ userId }) => userId),
+      ...card.list.board.members.map(({ userId }) => userId),
+    ])),
   });
 }
 

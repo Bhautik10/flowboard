@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,7 +46,11 @@ type Board = {
   title: string;
   backgroundColor: string | null;
   isFavorite: boolean;
+  backgroundImage?: string | null;
 };
+function cssImageUrl(value: string) {
+  return encodeURI(value).replace(/["'()\\\s]/g, (character) => `%${character.charCodeAt(0).toString(16).padStart(2, "0")}`);
+}
 type Workspace = {
   id: string;
   name: string;
@@ -90,6 +95,8 @@ export function WorkspaceSidebar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [recentBoardIds, setRecentBoardIds] = useState<string[]>([]);
   const [recentOpen, setRecentOpen] = useState(false);
+  const [boardColor, setBoardColor] = useState("#2563eb");
+  const [boardImage, setBoardImage] = useState("");
   const [starredOpen, setStarredOpen] = useState(false);
   const { data, isPending, isError } = useQuery({
     queryKey: ["workspaces"],
@@ -114,11 +121,21 @@ export function WorkspaceSidebar() {
       }
     };
     window.addEventListener("flowboard:recent-boards-updated", updateRecent);
+    const openWorkspace = () => setDialog({ kind: "workspace" });
+    const openBoard = () => {
+      const manageableWorkspace = queryClient.getQueryData<{ workspaces: Workspace[] }>(["workspaces"])?.workspaces.find((workspace) => workspace.role === "OWNER" || workspace.role === "ADMIN");
+      if (manageableWorkspace) setDialog({ kind: "board", workspace: manageableWorkspace });
+      else toast.error("Create a workspace before creating a board.");
+    };
+    window.addEventListener("flowboard:create-workspace", openWorkspace);
+    window.addEventListener("flowboard:create-board", openBoard);
     return () => {
       window.removeEventListener("flowboard:toggle-sidebar", toggleMobile);
       window.removeEventListener("flowboard:recent-boards-updated", updateRecent);
+      window.removeEventListener("flowboard:create-workspace", openWorkspace);
+      window.removeEventListener("flowboard:create-board", openBoard);
     };
-  }, []);
+  }, [queryClient]);
   useEffect(() => setMobileOpen(false), [pathname]);
 
   const invalidate = async () => {
@@ -169,11 +186,13 @@ export function WorkspaceSidebar() {
       workspaceId,
       title,
       backgroundColor,
+      backgroundImage,
     }: {
       workspaceId: string;
       title: string;
       backgroundColor: string;
-    }) => api<{ board: Board }>("/api/boards", "POST", { workspaceId, title, backgroundColor }),
+      backgroundImage?: string;
+    }) => api<{ board: Board }>("/api/boards", "POST", { workspaceId, title, backgroundColor, ...(backgroundImage ? { backgroundImage } : {}) }),
     onSuccess: async ({ board }) => {
       await invalidate();
       toast.success("Board created");
@@ -216,7 +235,7 @@ export function WorkspaceSidebar() {
     onError: (error: Error) => toast.error(error.message),
   });
 
-  function handleDialogSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleDialogSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!dialog) return;
     const form = new FormData(event.currentTarget);
@@ -233,10 +252,24 @@ export function WorkspaceSidebar() {
       });
     }
     if (dialog.kind === "board" && name) {
+      const imageUrl = String(form.get("backgroundImage") ?? "").trim();
+      if (imageUrl) {
+        try {
+          const parsed = new URL(imageUrl);
+          if (parsed.protocol !== "https:") throw new Error("Enter a valid HTTPS image URL");
+          await new Promise<void>((resolve, reject) => {
+            const image = new window.Image();
+            image.onload = () => resolve();
+            image.onerror = () => reject(new Error("That image could not be loaded. Check the URL and try another image."));
+            image.src = parsed.href;
+          });
+        } catch (error) { toast.error(error instanceof Error ? error.message : "Invalid image URL"); return; }
+      }
       createBoard.mutate({
         workspaceId: dialog.workspace.id,
         title: name,
         backgroundColor: String(form.get("backgroundColor") ?? "#2563eb"),
+        backgroundImage: imageUrl || undefined,
       });
     }
   }
@@ -295,10 +328,11 @@ export function WorkspaceSidebar() {
         <div className="space-y-1 border-b pb-3">
           <Link href="/" title="Home" className={cn("flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted", pathname === "/" && "bg-muted font-medium", sidebarCollapsed && "justify-center")}><Home className="h-4 w-4 shrink-0" />{!sidebarCollapsed && "Home"}</Link>
           {!clientOnly && <Link href="/my-cards" title="My cards" className={cn("flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted", pathname.startsWith("/my-cards") && "bg-muted font-medium", sidebarCollapsed && "justify-center")}><CreditCard className="h-4 w-4 shrink-0" />{!sidebarCollapsed && "My cards"}</Link>}
-          <button type="button" title="Starred boards" className={cn("flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted", sidebarCollapsed && "justify-center")} onClick={() => setStarredOpen((open) => !open)}><Star className="h-4 w-4 shrink-0 text-amber-500" />{!sidebarCollapsed && <><span className="flex-1">Starred boards</span>{starredOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</>}</button>
-          {starredOpen && !sidebarCollapsed && starredBoards.map((board) => <Link key={board.id} href={`/boards/${board.id}`} className="ml-6 block truncate rounded px-2 py-1 text-xs hover:bg-muted">{board.title}</Link>)}
-          <button type="button" title="Recent boards" className={cn("flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted", sidebarCollapsed && "justify-center")} onClick={() => setRecentOpen((open) => !open)}><Clock className="h-4 w-4 shrink-0" />{!sidebarCollapsed && <><span className="flex-1">Recent boards</span>{recentOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</>}</button>
-          {recentOpen && !sidebarCollapsed && recentBoards.map((board) => <Link key={board.id} href={`/boards/${board.id}`} className="ml-6 block truncate rounded px-2 py-1 text-xs hover:bg-muted">{board.title}</Link>)}
+          {clientOnly && <Link href="/shared-with-me" title="Shared with me" className={cn("flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted", pathname.startsWith("/shared-with-me") && "bg-muted font-medium", sidebarCollapsed && "justify-center")}><CreditCard className="h-4 w-4 shrink-0" />{!sidebarCollapsed && "Shared with me"}</Link>}
+          {!clientOnly && <button type="button" title="Starred boards" className={cn("flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted", sidebarCollapsed && "justify-center")} onClick={() => setStarredOpen((open) => !open)}><Star className="h-4 w-4 shrink-0 text-amber-500" />{!sidebarCollapsed && <><span className="flex-1">Starred boards</span>{starredOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</>}</button>}
+          {!clientOnly && starredOpen && !sidebarCollapsed && starredBoards.map((board) => <Link key={board.id} href={`/boards/${board.id}`} className="ml-6 block truncate rounded px-2 py-1 text-xs hover:bg-muted">{board.title}</Link>)}
+          {!clientOnly && <button type="button" title="Recent boards" className={cn("flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-muted", sidebarCollapsed && "justify-center")} onClick={() => setRecentOpen((open) => !open)}><Clock className="h-4 w-4 shrink-0" />{!sidebarCollapsed && <><span className="flex-1">Recent boards</span>{recentOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}</>}</button>}
+          {!clientOnly && recentOpen && !sidebarCollapsed && recentBoards.map((board) => <Link key={board.id} href={`/boards/${board.id}`} className="ml-6 block truncate rounded px-2 py-1 text-xs hover:bg-muted">{board.title}</Link>)}
           {!clientOnly && <Link href="/archived" title="Archived items" className={cn("flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted", pathname.startsWith("/archived") && "bg-muted font-medium", sidebarCollapsed && "justify-center")}><Archive className="h-4 w-4 shrink-0" />{!sidebarCollapsed && "Archived items"}</Link>}
           {!clientOnly && <Link href="/settings" title="Settings" className={cn("flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted", pathname.startsWith("/settings") && "bg-muted font-medium", sidebarCollapsed && "justify-center")}><Settings className="h-4 w-4 shrink-0" />{!sidebarCollapsed && "Settings"}</Link>}
         </div>
@@ -322,7 +356,7 @@ export function WorkspaceSidebar() {
             No workspaces yet. Create one to get started.
           </div>
         )}
-        {data?.workspaces.map((workspace) => {
+        {!clientOnly && data?.workspaces.map((workspace) => {
           const isCollapsed = collapsed[workspace.id] ?? false;
           const canManage = workspace.role === "OWNER" || workspace.role === "ADMIN";
           return (
@@ -454,29 +488,21 @@ export function WorkspaceSidebar() {
       {!sidebarCollapsed && <div className="border-t p-3 text-xs text-muted-foreground">
         FlowBoard · {data?.workspaces.reduce((total, workspace) => total + workspace._count.members, 0) ?? 0} workspace memberships
       </div>}
-      {dialog && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setDialog(null);
-          }}
-        >
+      <Dialog open={Boolean(dialog)} onOpenChange={(open) => { if (!open) setDialog(null); }}>
+        {dialog && <DialogContent className="max-w-md p-6">
           <form
-            className="w-full max-w-sm space-y-4 rounded-xl border bg-background p-5 shadow-xl"
+            className="space-y-4"
             onSubmit={handleDialogSubmit}
           >
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">
+            <DialogHeader>
+              <DialogTitle className="text-lg font-semibold">
                 {dialog.kind === "workspace" && "Create workspace"}
                 {dialog.kind === "rename" && "Rename workspace"}
                 {dialog.kind === "invite" && `Invite to ${dialog.workspace.name}`}
                 {dialog.kind === "board" && `Create board in ${dialog.workspace.name}`}
-              </h2>
-              <button type="button" onClick={() => setDialog(null)} aria-label="Close">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+              </DialogTitle>
+              <DialogDescription>Make a quick update to your FlowBoard workspace.</DialogDescription>
+            </DialogHeader>
             {(dialog.kind === "workspace" || dialog.kind === "rename") && (
               <Input
                 name="name"
@@ -491,16 +517,10 @@ export function WorkspaceSidebar() {
             {dialog.kind === "board" && (
               <>
                 <Input name="name" aria-label="Board title" placeholder="Board title" autoFocus maxLength={80} required />
-                <label className="flex items-center justify-between text-sm">
-                  Background color
-                  <input
-                    name="backgroundColor"
-                    type="color"
-                    defaultValue="#2563eb"
-                    aria-label="Board background color"
-                    className="h-9 w-14 cursor-pointer rounded border bg-background p-1"
-                  />
-                </label>
+                <input type="hidden" name="backgroundColor" value={boardColor} />
+                <div className="space-y-2"><p className="text-sm font-medium">Background</p><div className="grid grid-cols-5 gap-2">{["#2563eb", "#0f766e", "#7c3aed", "#e11d48", "#f59e0b", "linear-gradient(120deg,#059669,#0f766e)", "linear-gradient(120deg,#f97316,#db2777)", "linear-gradient(120deg,#334155,#0f172a)"].map((color) => <button key={color} type="button" aria-label={`Choose ${color.startsWith("linear") ? "gradient" : color} background`} aria-pressed={boardColor === color} className={cn("h-9 rounded-md border-2", boardColor === color ? "border-foreground ring-2 ring-primary/30" : "border-transparent")} style={{ background: color }} onClick={() => { setBoardColor(color); setBoardImage(""); }} />)}</div></div>
+                <label className="block space-y-1 text-sm">Optional image URL<Input name="backgroundImage" type="url" placeholder="https://example.com/image.jpg" value={boardImage} onChange={(event) => setBoardImage(event.target.value)} /></label>
+                <div className="overflow-hidden rounded-lg border"><div className="flex h-16 items-end bg-cover bg-center p-3 text-sm font-semibold text-white" style={{ backgroundColor: boardColor, backgroundImage: boardImage ? `linear-gradient(#0003,#0006),url(\"${cssImageUrl(boardImage)}\")` : undefined, backgroundSize: "cover", backgroundPosition: "center", backgroundRepeat: "no-repeat" }}>Board preview</div></div>
               </>
             )}
             {dialog.kind === "invite" && (
@@ -520,8 +540,8 @@ export function WorkspaceSidebar() {
               <Button type="submit" disabled={pending}>{pending ? "Saving…" : "Continue"}</Button>
             </div>
           </form>
-        </div>
-      )}
+        </DialogContent>}
+      </Dialog>
     </aside>
     </>
   );

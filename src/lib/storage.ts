@@ -160,6 +160,26 @@ export async function deleteStoredAttachment(key: string) {
   await storage.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }));
 }
 
+export async function storeBoardBackground(key: string, bytes: Buffer, mimeType: string, localPath: string) {
+  const storage = client();
+  if (!storage) {
+    await mkdir(path.dirname(localPath), { recursive: true });
+    await writeFile(localPath, bytes, { flag: "wx" });
+    return;
+  }
+  const config = s3Config()!;
+  await storage.send(new PutObjectCommand({ Bucket: config.bucket, Key: `board-backgrounds/${key}`, Body: bytes, ContentType: mimeType, ContentLength: bytes.length }));
+}
+
+export async function readBoardBackground(key: string, localPath: string) {
+  const storage = client();
+  if (!storage) return readFile(localPath);
+  const config = s3Config()!;
+  const response = await storage.send(new GetObjectCommand({ Bucket: config.bucket, Key: `board-backgrounds/${key}` }));
+  if (!response.Body) throw new Error("Background storage returned an empty file");
+  return Buffer.from(await response.Body.transformToByteArray());
+}
+
 export function attachmentStorageKey(key: string) {
   return /^[a-f0-9-]{36}\.(?:jpg|png|webp|pdf)$/.test(key) ? key : null;
 }

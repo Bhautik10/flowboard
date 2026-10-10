@@ -6,6 +6,7 @@ import {
   isResponse,
 } from "@/lib/workspaces";
 import { updateBoardSchema } from "@/lib/validations/workspaces";
+import { isMissingTableError } from "@/lib/prisma-errors";
 
 type Context = { params: { boardId: string } };
 
@@ -13,12 +14,17 @@ export async function GET(_request: Request, { params }: Context) {
   try {
     const access = await getBoardAccess(params.boardId);
     if (isResponse(access)) return access;
-    const cardVisibilityFilter =
-      access.role === "CLIENT" ? { visibility: "CLIENT_VISIBLE" as const } : {};
+    const cardVisibilityFilter = access.role === "CLIENT"
+      ? { visibility: "CLIENT_VISIBLE" as const, clients: { some: { clientUserId: access.userId } } }
+      : {};
     const board = await prisma.board.findUnique({
       where: { id: params.boardId },
       include: {
         workspace: { select: { id: true, name: true, slug: true } },
+        customFields: {
+          where: { name: { not: { startsWith: "[Archived]" } } },
+          orderBy: { position: "asc" },
+        },
         lists: {
           where: { archivedAt: null },
           orderBy: { position: "asc" },
@@ -32,6 +38,7 @@ export async function GET(_request: Request, { params }: Context) {
               orderBy: { position: "asc" },
               include: {
                 labels: { include: { label: true } },
+                customValues: { include: { customField: true } },
                 members: {
                   include: {
                     user: { select: { id: true, name: true, image: true } },
@@ -64,7 +71,15 @@ export async function GET(_request: Request, { params }: Context) {
       },
     });
     if (!board) return NextResponse.json({ error: "Board not found" }, { status: 404 });
+    const members = access.role === "CLIENT" ? [] : await prisma.boardMember.findMany({
+      where: { boardId: params.boardId },
+      select: { user: { select: { id: true, name: true, image: true } } },
+      orderBy: { joinedAt: "asc" },
+    });
     return NextResponse.json({
+      currentUserId: access.userId,
+      members: members.map(({ user }) => user),
+      customFields: access.role === "CLIENT" ? [] : board.customFields,
       board: {
         ...board,
         lists: board.lists.map((list) => ({
@@ -74,6 +89,9 @@ export async function GET(_request: Request, { params }: Context) {
             ...card,
             estimatedHours: access.role === "CLIENT" ? null : card.estimatedHours,
             labels: card.labels.map(({ label }) => label),
+            customFields: access.role === "CLIENT" ? [] : card.customValues
+              .filter(({ customField }) => !customField.name.startsWith("[Archived]"))
+              .map(({ customField, value }) => ({ fieldId: customField.id, name: customField.name, type: customField.type, options: customField.options, value })),
             members: access.role === "CLIENT" ? [] : card.members.map(({ user }) => user),
           })),
         })),
@@ -83,6 +101,9 @@ export async function GET(_request: Request, { params }: Context) {
       role: access.role,
     });
   } catch (error) {
+    if (isMissingTableError(error, "CardClient")) {
+      return NextResponse.json({ error: "Client card sharing is not available until the database migration is applied." }, { status: 503 });
+    }
     console.error("[boards/get] Could not load board data", { boardId: params.boardId, error });
     return NextResponse.json(
       { error: "Board data could not be loaded. Check the server logs and database migrations." },

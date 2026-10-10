@@ -39,7 +39,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { CustomFieldsPanel } from "@/components/cards/custom-fields-panel";
+import { TimeTrackingPanel } from "@/components/cards/time-tracking-panel";
 
 type Member = { id: string; name: string | null; email: string; image: string | null };
 type Label = { id: string; name: string; color: string };
@@ -63,8 +66,6 @@ type Attachment = {
   isCurrentVersion: boolean;
   createdAt: string;
   uploadedBy: { id: string; name: string | null; image: string | null } | null;
-  clientKey?: string | null;
-  sharedWithAllClients?: boolean;
 };
 type DesignPin = { id: string; body: string; x: number; y: number; resolvedAt: string | null; authorName: string };
 type AttachmentVersions = { versions: { id: string; name: string; versionNumber: number; isCurrentVersion: boolean }[] };
@@ -79,8 +80,6 @@ type CardComment = {
   authorId: string | null;
   authorLabel: string | null;
   visibility: "INTERNAL" | "CLIENT";
-  clientKey?: string | null;
-  sharedWithAllClients?: boolean;
   body: string;
   createdAt: string;
   updatedAt: string;
@@ -112,17 +111,6 @@ type DetailCard = {
     createdAt: string;
     actor: { id: string; name: string | null; image: string | null } | null;
     actorLabel: string | null;
-    clientKey?: string | null;
-    sharedWithAllClients?: boolean;
-  }[];
-  clientShares: {
-    clientKey: string;
-    userId: string | null;
-    shareLinkId: string | null;
-    approvalStatus: DetailCard["approvalStatus"];
-    revisionRound: number;
-    approvedAt: string | null;
-    user: Member | null;
   }[];
   createdBy: { id: string; name: string | null; image: string | null } | null;
   attachments: Attachment[];
@@ -130,13 +118,14 @@ type DetailCard = {
   labels: Label[];
   members: Member[];
   checklists: Checklist[];
+  customValues: { customFieldId: string; value: unknown }[];
   list: { id: string; title: string };
 };
+type CustomFieldDefinition = { id: string; name: string; type: "TEXT" | "NUMBER" | "DROPDOWN" | "DATE" | "CHECKBOX"; options: unknown; required: boolean; position: string };
 type DetailResponse = {
   card: DetailCard;
   boardMembers: Member[];
-  clients: Member[];
-  cardShares: DetailCard["clientShares"];
+  customFields: CustomFieldDefinition[];
   targetBoards: {
     id: string;
     title: string;
@@ -144,15 +133,8 @@ type DetailResponse = {
   }[];
   role: "OWNER" | "ADMIN" | "MEMBER" | "VIEWER" | "CLIENT";
   currentUserId: string;
-  clientKey: string | null;
 };
-type CardUpdates = {
-  comments: CardComment[];
-  attachments: Attachment[];
-  activities: DetailCard["activities"];
-  clientShares: DetailCard["clientShares"];
-  serverTime: string;
-};
+type CardClientsResponse = { clients: Member[]; shares: { clientUserId: string; clientUser: Member }[] };
 type Action = {
   url: string;
   method?: string;
@@ -361,6 +343,9 @@ export function CardDetailDialog({
   const card = data?.card;
   const isClient = data?.role === "CLIENT";
   const canInteract = canEdit || isClient;
+  const [selectedClientId, setSelectedClientId] = useState("");
+  const [clientSharingPending, setClientSharingPending] = useState(false);
+  const cardClientsQuery = useQuery({ queryKey: ["card-clients", cardId], queryFn: () => requestJson<CardClientsResponse>(`/api/cards/${cardId}/clients`), enabled: Boolean(cardId && canEdit) });
   const [editingTitle, setEditingTitle] = useState(false);
   const cancelTitleEdit = useRef(false);
   const [title, setTitle] = useState("");
@@ -492,6 +477,18 @@ export function CardDetailDialog({
       if (variables.closeOnSuccess) onOpenChange(false);
     },
   });
+
+  async function setClientSharing(clientUserId: string, remove = false) {
+    if (!cardId) return;
+    setClientSharingPending(true);
+    try {
+      await requestJson(`/api/cards/${cardId}/clients`, remove ? "DELETE" : "POST", { clientUserId });
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ["card-clients", cardId] }), queryClient.invalidateQueries({ queryKey: ["card-detail", cardId] }), queryClient.invalidateQueries({ queryKey: ["board"] })]);
+      setSelectedClientId("");
+      toast.success(remove ? "Client access removed" : "Card shared with client");
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Could not update client access"); }
+    finally { setClientSharingPending(false); }
+  }
 
   const boardLabels = useQuery({
     queryKey: ["board-labels", boardId],
@@ -1155,10 +1152,7 @@ export function CardDetailDialog({
                       )}>{card.approvalStatus.replace("_", " ")} · Round {card.revisionRound}</span>}
                       {!isClient && <label className="flex items-center gap-2 text-xs text-muted-foreground">
                         Client visibility
-                        <select value={card.visibility} disabled={!canEdit} onChange={(event) => mutateCard({ visibility: event.target.value }, "Card visibility updated")} className="rounded-md border bg-background px-2 py-1 text-foreground">
-                          <option value="INTERNAL">Internal</option>
-                          <option value="CLIENT_VISIBLE">Visible to client</option>
-                        </select>
+                        <Select value={card.visibility} disabled={!canEdit} onValueChange={(value) => mutateCard({ visibility: value }, "Card visibility updated")}><SelectTrigger aria-label="Card visibility" className="h-8 w-40"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="INTERNAL">Internal</SelectItem><SelectItem value="CLIENT_VISIBLE">Visible to client</SelectItem></SelectContent></Select>
                       </label>}
                     </div>
                     {canEdit && card.visibility === "CLIENT_VISIBLE" && card.approvalStatus !== "PENDING" && <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => void submitApproval("send")}>Send for approval</Button>}
@@ -1209,6 +1203,9 @@ export function CardDetailDialog({
                     </div>
                   )}
                 </section>
+
+                {!isClient && <CustomFieldsPanel boardId={boardId} cardId={card.id} fields={data?.customFields ?? []} values={card.customValues ?? []} canEdit={canEdit} />}
+                {!isClient && <TimeTrackingPanel cardId={card.id} estimatedHours={card.estimatedHours} />}
 
                 <section id="card-checklists" className="space-y-4">
                   <div className="flex items-center justify-between">
@@ -1369,10 +1366,7 @@ export function CardDetailDialog({
                     <MentionTextarea value={commentDraft} onChange={setCommentDraft} members={data?.boardMembers ?? []} disabled={!canInteract} rows={3} label="Write a comment" placeholder="Write a comment… Type @ to mention someone." className="min-h-20 w-full resize-y rounded-xl border bg-background p-3 text-sm outline-none ring-ring placeholder:text-muted-foreground focus-visible:ring-2" />
                     <div className="flex items-center justify-between gap-2">
                       {!isClient && <label className="text-xs text-muted-foreground">Visible to
-                        <select value={commentVisibility} onChange={(event) => setCommentVisibility(event.target.value as "INTERNAL" | "CLIENT")} className="ml-2 rounded-md border bg-background px-2 py-1 text-foreground">
-                          <option value="INTERNAL">Internal</option>
-                          <option value="CLIENT">Visible to client</option>
-                        </select>
+                        <Select value={commentVisibility} onValueChange={(value) => setCommentVisibility(value as "INTERNAL" | "CLIENT")}><SelectTrigger aria-label="Comment visibility" className="ml-2 h-8 w-40"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="INTERNAL">Internal</SelectItem><SelectItem value="CLIENT">Visible to client</SelectItem></SelectContent></Select>
                       </label>}
                       <Button type="submit" size="sm" disabled={!commentDraft.trim() || commentSubmitting}>
                         {commentSubmitting ? "Sending…" : isClient ? "Send comment" : "Comment"}
@@ -1447,12 +1441,12 @@ export function CardDetailDialog({
                 <div>
                   <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Add to card</h3>
                   <nav className="grid grid-cols-2 gap-2" aria-label="Card actions">
-                    <Button type="button" title="Members (M)" variant="outline" size="sm" className="justify-start" onClick={() => focusActionSection("card-members-picker")}><Users className="h-4 w-4" />Members</Button>
-                    <Button type="button" title="Labels (L)" variant="outline" size="sm" className="justify-start" onClick={() => focusActionSection("card-labels")}><Tag className="h-4 w-4" />Labels</Button>
-                    <Button type="button" title="Dates (D)" variant="outline" size="sm" className="justify-start" onClick={() => focusActionSection("card-dates")}><CalendarDays className="h-4 w-4" />Dates</Button>
-                    <Button type="button" title="Priority (P)" variant="outline" size="sm" className="justify-start" onClick={() => focusActionSection("card-priority")}><Flag className="h-4 w-4" />Priority</Button>
-                    <Button type="button" title="Checklist" variant="outline" size="sm" className="justify-start" onClick={() => focusActionSection("card-checklists")}><CheckSquare className="h-4 w-4" />Checklist</Button>
-                    <Button type="button" variant="outline" size="sm" className="justify-start" onClick={() => focusActionSection("card-attachments")}><Paperclip className="h-4 w-4" />Attachment</Button>
+                    <Button type="button" title="Members (M)" variant="outline" size="sm" className="h-9 min-w-0 justify-start overflow-hidden px-2" onClick={() => focusActionSection("card-members-picker")}><Users className="h-4 w-4" /><span className="min-w-0 truncate">Members</span></Button>
+                    <Button type="button" title="Labels (L)" variant="outline" size="sm" className="h-9 min-w-0 justify-start overflow-hidden px-2" onClick={() => focusActionSection("card-labels")}><Tag className="h-4 w-4" /><span className="min-w-0 truncate">Labels</span></Button>
+                    <Button type="button" title="Dates (D)" variant="outline" size="sm" className="h-9 min-w-0 justify-start overflow-hidden px-2" onClick={() => focusActionSection("card-dates")}><CalendarDays className="h-4 w-4" /><span className="min-w-0 truncate">Dates</span></Button>
+                    <Button type="button" title="Priority (P)" variant="outline" size="sm" className="h-9 min-w-0 justify-start overflow-hidden px-2" onClick={() => focusActionSection("card-priority")}><Flag className="h-4 w-4" /><span className="min-w-0 truncate">Priority</span></Button>
+                    <Button type="button" title="Checklist" variant="outline" size="sm" className="h-9 min-w-0 justify-start overflow-hidden px-2" onClick={() => focusActionSection("card-checklists")}><CheckSquare className="h-4 w-4" /><span className="min-w-0 truncate">Checklist</span></Button>
+                    <Button type="button" title="Attachment" variant="outline" size="sm" className="h-9 min-w-0 justify-start overflow-hidden px-2" onClick={() => focusActionSection("card-attachments")}><Paperclip className="h-4 w-4" /><span className="min-w-0 truncate">Attachment</span></Button>
                   </nav>
                 </div>
 
@@ -1535,30 +1529,20 @@ export function CardDetailDialog({
                   </label>
                 </section>}
 
+                {canEdit && <section id="card-client-share" className="space-y-2 border-t pt-4">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Share with client</h3>
+                  <Select value={selectedClientId || "none"} onValueChange={(value) => setSelectedClientId(value === "none" ? "" : value)} disabled={clientSharingPending}>
+                    <SelectTrigger aria-label="Choose a client" className="w-full"><SelectValue placeholder="Choose workspace client" /></SelectTrigger>
+                    <SelectContent><SelectItem value="none">Choose workspace client</SelectItem>{(cardClientsQuery.data?.clients ?? []).map((client) => <SelectItem key={client.id} value={client.id}>{client.name ?? client.email}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <Button type="button" size="sm" variant="outline" className="w-full" disabled={!selectedClientId || clientSharingPending} onClick={() => void setClientSharing(selectedClientId)}>Share card</Button>
+                  <div className="space-y-1">{(cardClientsQuery.data?.shares ?? []).map((share) => <div key={share.clientUserId} className="flex min-w-0 items-center gap-2 rounded-md border p-2"><span className="min-w-0 flex-1 truncate text-xs">{share.clientUser.name ?? share.clientUser.email}</span><Button type="button" variant="ghost" size="sm" className="h-7 shrink-0 px-2 text-destructive" aria-label={`Remove ${share.clientUser.name ?? share.clientUser.email}`} disabled={clientSharingPending} onClick={() => void setClientSharing(share.clientUserId, true)}>Remove</Button></div>)}{cardClientsQuery.isLoading && <p className="text-xs text-muted-foreground">Loading clients…</p>}{!cardClientsQuery.isLoading && !cardClientsQuery.data?.clients.length && <p className="text-xs text-muted-foreground">Invite a client to this workspace first.</p>}</div>
+                </section>}
+
                 <section id="card-move" className="space-y-2 border-t pt-4">
                   <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Move card</h3>
-                  <select
-                    value={targetBoardId}
-                    disabled={!canEdit}
-                    aria-label="Destination board"
-                    className="w-full rounded-lg border bg-background px-2 py-2 text-sm"
-                    onChange={(event) => {
-                      const nextBoard = data?.targetBoards.find((item) => item.id === event.target.value);
-                      setTargetBoardId(event.target.value);
-                      setTargetListId(nextBoard?.lists[0]?.id ?? "");
-                    }}
-                  >
-                    {(data?.targetBoards ?? []).map((target) => <option key={target.id} value={target.id}>{target.title}</option>)}
-                  </select>
-                  <select
-                    value={targetListId}
-                    disabled={!canEdit || !data?.targetBoards.find((item) => item.id === targetBoardId)?.lists.length}
-                    aria-label="Destination list"
-                    className="w-full rounded-lg border bg-background px-2 py-2 text-sm"
-                    onChange={(event) => setTargetListId(event.target.value)}
-                  >
-                    {(data?.targetBoards.find((item) => item.id === targetBoardId)?.lists ?? []).map((target) => <option key={target.id} value={target.id}>{target.title}</option>)}
-                  </select>
+                  <Select value={targetBoardId} disabled={!canEdit} onValueChange={(value) => { const nextBoard = data?.targetBoards.find((item) => item.id === value); setTargetBoardId(value); setTargetListId(nextBoard?.lists[0]?.id ?? ""); }}><SelectTrigger aria-label="Destination board"><SelectValue placeholder="Choose board" /></SelectTrigger><SelectContent>{(data?.targetBoards ?? []).map((target) => <SelectItem key={target.id} value={target.id}>{target.title}</SelectItem>)}</SelectContent></Select>
+                  <Select value={targetListId} disabled={!canEdit || !data?.targetBoards.find((item) => item.id === targetBoardId)?.lists.length} onValueChange={setTargetListId}><SelectTrigger aria-label="Destination list"><SelectValue placeholder="Choose list" /></SelectTrigger><SelectContent>{(data?.targetBoards.find((item) => item.id === targetBoardId)?.lists ?? []).map((target) => <SelectItem key={target.id} value={target.id}>{target.title}</SelectItem>)}</SelectContent></Select>
                   <Button type="button" variant="outline" size="sm" className="w-full" disabled={!canEdit || action.isPending || !targetListId} onClick={moveCardToSelection}>
                     <ArrowRightLeft className="h-4 w-4" /> Move card
                   </Button>
@@ -1630,12 +1614,7 @@ export function CardDetailDialog({
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <p className="truncate text-sm font-medium">{previewAttachment.name} · v{previewAttachment.versionNumber}</p>
                 <div className="flex gap-2">
-                  {versionsQuery.data && versionsQuery.data.versions.length > 1 && <select
-                    aria-label="Choose design version"
-                    value={previewAttachment.id}
-                    onChange={(event) => void selectImageVersion(event.target.value)}
-                    className="max-w-44 rounded border border-white/20 bg-black px-2 py-1 text-sm text-white"
-                  >{versionsQuery.data.versions.map((version) => <option key={version.id} value={version.id}>v{version.versionNumber}{version.isCurrentVersion ? " · current" : ""}</option>)}</select>}
+                  {versionsQuery.data && versionsQuery.data.versions.length > 1 && <Select aria-label="Choose design version" value={previewAttachment.id} onValueChange={(value) => void selectImageVersion(value)}><SelectTrigger className="h-8 max-w-44 border-white/20 bg-black text-white"><SelectValue /></SelectTrigger><SelectContent>{versionsQuery.data.versions.map((version) => <SelectItem key={version.id} value={version.id}>v{version.versionNumber}{version.isCurrentVersion ? " · current" : ""}</SelectItem>)}</SelectContent></Select>}
                   {(canEdit || isClient) && <label className="cursor-pointer rounded border border-white/20 px-2 py-1 text-xs hover:bg-white/10">
                     Upload version
                     <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={(event) => {

@@ -39,6 +39,7 @@ import {
   Archive,
   CalendarDays,
   CheckSquare,
+  Clock3,
   Copy,
   FileText,
   Flag,
@@ -78,6 +79,11 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { CardDetailDialog } from "@/components/cards/card-detail-dialog";
+import { BoardFilterBar } from "@/components/boards/board-filter-bar";
+import { BoardViews, type ViewCard } from "@/components/boards/board-views";
+import { CustomFieldManager } from "@/components/boards/custom-field-manager";
+import { TimeReportDialog } from "@/components/boards/time-report-dialog";
+import { cardMatchesFilters } from "@/lib/board-filters";
 import {
   Dialog,
   DialogContent,
@@ -100,9 +106,11 @@ type Card = {
   description?: string | null;
   priority?: "LOW" | "NORMAL" | "HIGH" | "URGENT";
   dueDate?: string | Date | null;
+  startDate?: string | Date | null;
   isComplete?: boolean;
   labels?: { id: string; name: string; color: string }[];
   members?: { id: string; name: string | null; image: string | null }[];
+  customFields?: { fieldId: string; name: string; type: string; options: unknown; value: unknown }[];
   checklists?: { items: { isComplete: boolean }[] }[];
   coverValue?: string | null;
   approvalStatus?: "NONE" | "PENDING" | "APPROVED" | "CHANGES_REQUESTED";
@@ -126,8 +134,9 @@ type Board = {
   isFavorite: boolean;
   workspace: { id: string; name: string };
   lists: BoardList[];
+  customFields: { id: string; name: string; type: "TEXT" | "NUMBER" | "DROPDOWN" | "DATE" | "CHECKBOX"; options: unknown; required: boolean; position: string }[];
 };
-type BoardResponse = { board: Board; role: "OWNER" | "ADMIN" | "MEMBER" | "VIEWER" | "CLIENT" };
+type BoardResponse = { board: Board; role: "OWNER" | "ADMIN" | "MEMBER" | "VIEWER" | "CLIENT"; currentUserId: string; members: { id: string; name: string | null; image: string | null }[]; customFields: Board["customFields"] };
 type DragItemData =
   | { type: "list"; listId: string; title: string }
   | { type: "card"; cardId: string; listId: string; title: string }
@@ -363,6 +372,9 @@ function SortableCard({
           ))}
         </div>
       ) : null}
+      {card.customFields?.filter((field) => field.options && typeof field.options === "object" && "showOnCard" in field.options && (field.options as { showOnCard?: unknown }).showOnCard === true && field.value !== null && field.value !== undefined && field.value !== "").map((field) => (
+        <span key={field.fieldId} className="max-w-full truncate rounded-md bg-muted px-2 py-1 text-[11px] text-muted-foreground">{field.name}: {typeof field.value === "boolean" ? field.value ? "Yes" : "No" : String(field.value)}</span>
+      ))}
       {card.coverValue && card.coverValue.startsWith("/api/attachments/") ? (
         <div className="-mx-3 -mt-3 h-24 w-[calc(100%+1.5rem)] overflow-hidden rounded-t-xl">
           <Image
@@ -741,6 +753,10 @@ function SortableListColumn({
   );
 }
 
+function encodeCssUrl(value: string) {
+  return encodeURI(value).replace(/["'()\\\s]/g, (character) => `%${character.charCodeAt(0).toString(16).padStart(2, "0")}`);
+}
+
 export function BoardView({ boardId }: { boardId: string }) {
   const queryClient = useQueryClient();
   const router = useRouter();
@@ -762,6 +778,8 @@ export function BoardView({ boardId }: { boardId: string }) {
   const [createdClientUrl, setCreatedClientUrl] = useState("");
   const [createdClientShareId, setCreatedClientShareId] = useState<string | null>(null);
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
+  const [customFieldDialogOpen, setCustomFieldDialogOpen] = useState(false);
+  const [timeReportOpen, setTimeReportOpen] = useState(false);
   const [templateChoice, setTemplateChoice] = useState("logo-design");
   const selectedCardId = searchParams.get("card");
   const queryKey = ["board", boardId];
@@ -789,6 +807,19 @@ export function BoardView({ boardId }: { boardId: string }) {
   const board = data?.board;
   const canEdit = data?.role !== "VIEWER" && data?.role !== "CLIENT";
   const canManage = data?.role === "OWNER" || data?.role === "ADMIN";
+  const filterParams = new URLSearchParams(searchParams.toString());
+  const requestedView = filterParams.get("view");
+  const selectedView = requestedView && ["board", "table", "calendar", "timeline"].includes(requestedView) ? requestedView : "board";
+  const setFilterParams = (next: URLSearchParams) => {
+    if (!next.get("view")) next.delete("view");
+    const query = next.toString();
+    router.replace(`/boards/${boardId}${query ? `?${query}` : ""}`, { scroll: false });
+  };
+  const allCards = board?.lists.flatMap((list) => list.cards.map((card) => ({ ...card, listId: list.id, listTitle: list.title }))) ?? [];
+  const visibleCards = allCards.filter((card) => cardMatchesFilters(card, filterParams));
+  const filterLabels = Array.from(new Map(allCards.flatMap((card) => card.labels ?? []).map((label) => [label.id, label])).values());
+  const filterMembers = (data?.members ?? []).map((member) => ({ id: member.id, name: member.name ?? "Member", image: member.image }));
+  const viewCards: ViewCard[] = visibleCards.map((card) => ({ ...card, dueDate: card.dueDate ? new Date(card.dueDate).toISOString() : null, startDate: card.startDate ? new Date(card.startDate).toISOString() : null, listId: card.listId, listTitle: card.listTitle }));
   const clientShares = useQuery<{ links: { id: string; clientName: string | null; clientEmail: string | null; expiresAt: string | null; revokedAt: string | null; createdAt: string }[] }>({
     queryKey: ["client-shares", boardId],
     queryFn: () => api(`/api/boards/${boardId}/client-shares`),
@@ -981,6 +1012,27 @@ export function BoardView({ boardId }: { boardId: string }) {
     },
     onError: (error: Error) => toast.error(error.message),
   });
+  const updateViewCard = async (cardId: string, value: Record<string, unknown>) => {
+    await queryClient.cancelQueries({ queryKey });
+    const previous = queryClient.getQueryData<BoardResponse>(queryKey);
+    if (previous) queryClient.setQueryData<BoardResponse>(queryKey, { ...previous, board: { ...previous.board, lists: previous.board.lists.map((list) => ({ ...list, cards: list.cards.map((card) => card.id === cardId ? { ...card, ...value } : card) })) } });
+    try { await api(`/api/cards/${cardId}`, "PATCH", value); await refresh(); toast.success("Card updated"); }
+    catch (error) { if (previous) queryClient.setQueryData(queryKey, previous); toast.error(error instanceof Error ? error.message : "Card update failed"); }
+  };
+  const moveViewCard = async (cardId: string, listId: string) => {
+    const previous = queryClient.getQueryData<BoardResponse>(queryKey); if (!previous) return;
+    const target = previous.board.lists.find((list) => list.id === listId); if (!target) return;
+    const neighbors = target.cards.filter((card) => card.id !== cardId); const beforeCardId = neighbors.at(-1)?.id ?? null;
+    await api(`/api/cards/${cardId}/move`, "POST", { listId, beforeCardId, afterCardId: null }); await refresh();
+  };
+  const assignViewCards = async (ids: string[], userId: string) => {
+    for (const id of ids) {
+      const card = allCards.find((item) => item.id === id); const memberIds = Array.from(new Set([...(card?.members?.map((member) => member.id) ?? []), userId]));
+      await api(`/api/cards/${id}/members`, "PUT", { userIds: memberIds });
+    }
+    await refresh(); toast.success("Selected cards assigned");
+  };
+  const archiveViewCards = async (ids: string[]) => { for (const id of ids) await api(`/api/cards/${id}`, "PATCH", { archived: true }); await refresh(); toast.success("Selected cards archived"); };
 
   async function uploadBoardBackground(file: File) {
     setBackgroundFilePending(true);
@@ -1224,7 +1276,7 @@ export function BoardView({ boardId }: { boardId: string }) {
         background: board.backgroundColor ?? "#2563eb",
         ...(board.backgroundImage
           ? {
-              backgroundImage: `linear-gradient(rgba(0,0,0,.2), rgba(0,0,0,.2)), url("${board.backgroundImage}")`,
+              backgroundImage: `linear-gradient(rgba(0,0,0,.2), rgba(0,0,0,.2)), url("${encodeCssUrl(board.backgroundImage)}")`,
               backgroundSize: "cover",
               backgroundPosition: "center",
               backgroundAttachment: "fixed",
@@ -1272,6 +1324,7 @@ export function BoardView({ boardId }: { boardId: string }) {
             Board settings
           </Link>
         </Button>}
+        {data.role !== "CLIENT" && <Button type="button" variant="ghost" size="sm" className="text-white hover:bg-white/15 hover:text-white" onClick={() => setTimeReportOpen(true)}><Clock3 className="h-4 w-4" />Time report</Button>}
         {canManage && (
           <>
             <label className="flex items-center gap-2 text-sm">
@@ -1316,6 +1369,8 @@ export function BoardView({ boardId }: { boardId: string }) {
                 }}>
                   <Palette className="h-4 w-4" /> Change background
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setCustomFieldDialogOpen(true)}>Custom fields…</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setCustomFieldDialogOpen(true)}>Custom fields…</DropdownMenuItem>
                 <DropdownMenuItem destructive onClick={() => {
                   if (window.confirm(`Archive "${board.title}"?`)) {
                     updateBoard.mutate(
@@ -1331,6 +1386,13 @@ export function BoardView({ boardId }: { boardId: string }) {
           </>
         )}
       </header>
+
+      <div className="mb-3 flex flex-wrap items-center gap-1 rounded-lg bg-black/10 p-1" role="tablist" aria-label="Board view">
+        {([ ["board", "Board"], ["table", "Table"], ["calendar", "Calendar"], ["timeline", "Timeline"] ] as const).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={selectedView === value} className={cn("rounded-md px-3 py-1.5 text-sm font-medium text-white/80 transition hover:bg-white/15", selectedView === value && "bg-white text-slate-900 shadow")} onClick={() => { const next = new URLSearchParams(filterParams); next.set("view", value); setFilterParams(next); }}>{label}</button>)}
+      </div>
+      <BoardFilterBar boardId={boardId} userId={data.currentUserId} role={data.role} cards={allCards} labels={filterLabels} members={filterMembers} customFields={data.customFields} params={filterParams} onChange={setFilterParams} />
+
+      {selectedView !== "board" && <BoardViews view={selectedView} cards={viewCards} lists={board.lists.map((list) => ({ id: list.id, title: list.title }))} customFields={data.customFields} canEdit={canEdit} openCard={openCard} updateCard={updateViewCard} moveCard={moveViewCard} assignCards={assignViewCards} archiveCards={archiveViewCards} people={data.members} />}
 
       <Dialog open={backgroundDialogOpen} onOpenChange={setBackgroundDialogOpen}>
         <DialogContent className="max-w-lg p-6">
@@ -1381,6 +1443,7 @@ export function BoardView({ boardId }: { boardId: string }) {
               onChange={(event) => setBackgroundUrl(event.target.value)}
               placeholder="https://example.com/background.jpg"
             />
+            {backgroundUrl.trim() && <div role="img" aria-label="Board background preview" className="mt-2 h-20 rounded-lg border bg-cover bg-center" style={{ backgroundColor: backgroundDraft, backgroundImage: `url("${encodeCssUrl(backgroundUrl.trim())}")`, backgroundSize: "cover", backgroundPosition: "center", backgroundRepeat: "no-repeat" }} />}
             <label className="block text-sm font-medium" htmlFor="board-background-upload">Or upload an image (JPEG, PNG, WebP; 5 MB max)</label>
             <Input
               id="board-background-upload"
@@ -1397,15 +1460,25 @@ export function BoardView({ boardId }: { boardId: string }) {
           <div className="mt-5 flex justify-end gap-2">
             <Button variant="outline" onClick={() => setBackgroundDialogOpen(false)}>Cancel</Button>
             <Button
-              disabled={updateBoard.isPending || (
-                Boolean(backgroundUrl) &&
-                !backgroundUrl.startsWith("https://") &&
-                !backgroundUrl.startsWith("/api/board-backgrounds/")
-              )}
-              onClick={() => {
+                disabled={updateBoard.isPending}
+              onClick={async () => {
+                const imageUrl = backgroundUrl.trim();
+                if (imageUrl) {
+                  let parsed: URL;
+                  try { parsed = new URL(imageUrl); if (parsed.protocol !== "https:" || !parsed.hostname) throw new Error(); }
+                  catch { toast.error("Enter a valid HTTPS image URL"); return; }
+                  try {
+                    await new Promise<void>((resolve, reject) => {
+                      const image = new window.Image();
+                      image.onload = () => resolve();
+                      image.onerror = () => reject(new Error("The image could not be loaded. Check the URL and host permissions."));
+                      image.src = parsed.href;
+                    });
+                  } catch (error) { toast.error(error instanceof Error ? error.message : "The image could not be loaded"); return; }
+                }
                 updateBoard.mutate({
-                  payload: backgroundUrl
-                    ? { backgroundImage: backgroundUrl }
+                  payload: imageUrl
+                    ? { backgroundImage: imageUrl }
                     : { backgroundColor: backgroundDraft, backgroundImage: null },
                   message: "Board background updated",
                 }, { onSuccess: () => setBackgroundDialogOpen(false) });
@@ -1480,13 +1553,13 @@ export function BoardView({ boardId }: { boardId: string }) {
         </DialogContent>
       </Dialog>
 
-      {board.lists.length === 0 && (
+      {selectedView === "board" && board.lists.length === 0 && (
         <div className="mb-4 rounded-lg border border-dashed border-white/50 bg-white/10 p-6 text-sm text-white">
           <h2 className="font-semibold">This board is ready for its first list</h2>
           <p className="mt-1 text-white/80">Add a list to start organizing cards into columns.</p>
         </div>
       )}
-      <DndContext
+      {selectedView === "board" && <DndContext
         sensors={moveList.isPending || moveCard.isPending ? [] : sensors}
         collisionDetection={collisionDetection}
         accessibility={{
@@ -1515,7 +1588,7 @@ export function BoardView({ boardId }: { boardId: string }) {
             {board.lists.map((list) => (
               <SortableListColumn
                 key={list.id}
-                list={list}
+                list={filterParams.get("only") === "1" ? { ...list, cards: list.cards.filter((card) => cardMatchesFilters(card, filterParams)) } : list}
                 canEdit={canEdit}
                 editingCard={editingCard}
                 activeCardDragging={activeDrag?.type === "card"}
@@ -1563,6 +1636,7 @@ export function BoardView({ boardId }: { boardId: string }) {
           ) : null}
         </DragOverlay>
       </DndContext>
+      }
       <CardDetailDialog
         boardId={boardId}
         cardId={selectedCardId}
@@ -1572,6 +1646,8 @@ export function BoardView({ boardId }: { boardId: string }) {
         }}
         onChanged={refresh}
       />
+      {canManage && <CustomFieldManager boardId={boardId} open={customFieldDialogOpen} onOpenChange={setCustomFieldDialogOpen} />}
+      {data.role !== "CLIENT" && <TimeReportDialog boardId={boardId} open={timeReportOpen} onOpenChange={setTimeReportOpen} />}
     </section>
   );
 }

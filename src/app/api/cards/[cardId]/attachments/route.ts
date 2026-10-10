@@ -16,7 +16,7 @@ type Context = { params: { cardId: string } };
 
 export async function POST(request: Request, { params }: Context) {
   try {
-    const access = await getCardActorAccess(params.cardId, request);
+    const access = await getCardActorAccess(params.cardId);
     if (isCardActorResponse(access)) return access;
     if (!canEditContent(access.role) && access.role !== "CLIENT") {
       return NextResponse.json({ error: "Viewers cannot add attachments" }, { status: 403 });
@@ -60,7 +60,6 @@ export async function POST(request: Request, { params }: Context) {
               boardId: card.boardId,
               cardId: card.id,
               actorId: access.userId,
-              actorLabel: access.actorLabel ?? undefined,
               entityType: "CARD",
               entityId: card.id,
               action: "ATTACHMENT_ADDED",
@@ -82,7 +81,7 @@ export async function POST(request: Request, { params }: Context) {
           console.error("[attachments/create] Attachment saved but notifications failed", { cardId: card.id, error });
         }
         return NextResponse.json({
-          attachment: { ...attachment, url: `/api/attachments/${attachment.id}/file${access.shareToken ? `?share=${access.shareToken}` : ""}` },
+          attachment: { ...attachment, url: `/api/attachments/${attachment.id}/file` },
         }, { status: 201 });
       } catch (error) {
         console.error("[attachments/create] Attachment metadata could not be saved", error);
@@ -114,7 +113,6 @@ export async function POST(request: Request, { params }: Context) {
           boardId: card.boardId,
           cardId: card.id,
           actorId: access.userId,
-          actorLabel: access.actorLabel ?? undefined,
           entityType: "CARD",
           entityId: card.id,
           action: "ATTACHMENT_LINK_ADDED",

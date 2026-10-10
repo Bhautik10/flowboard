@@ -7,7 +7,7 @@ import { notifyApprovalClients, notifyTeamOfClientApproval } from "@/lib/notific
 
 export async function POST(request: Request, { params }: { params: { cardId: string } }) {
   try {
-    const access = await getCardActorAccess(params.cardId, request);
+    const access = await getCardActorAccess(params.cardId);
     if (isCardActorResponse(access)) return access;
     if (access.cardVisibility !== "CLIENT_VISIBLE") {
       return NextResponse.json({ error: "Only client-visible cards can be approved" }, { status: 404 });
@@ -69,7 +69,6 @@ export async function POST(request: Request, { params }: { params: { cardId: str
           data: {
             cardId: card.id,
             authorId: access.userId,
-            authorLabel: access.actorLabel,
             body: parsed.data.body,
             visibility: "CLIENT",
           },
@@ -79,7 +78,6 @@ export async function POST(request: Request, { params }: { params: { cardId: str
             boardId: card.boardId,
             cardId: card.id,
             actorId: access.userId,
-            actorLabel: access.actorLabel,
             entityType: "COMMENT",
             entityId: comment.id,
             action: "COMMENT_ADDED",
@@ -92,7 +90,6 @@ export async function POST(request: Request, { params }: { params: { cardId: str
           boardId: card.boardId,
           cardId: card.id,
           actorId: access.userId,
-          actorLabel: access.actorLabel,
           entityType: "CARD",
           entityId: card.id,
           action: parsed.data.action === "approve" ? "CLIENT_APPROVED" : "CLIENT_CHANGES_REQUESTED",

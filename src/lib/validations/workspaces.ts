@@ -2,8 +2,11 @@ import { z } from "zod";
 
 const name = z.string().trim().min(1, "Name is required").max(80);
 const color = z.string().regex(/^#[0-9a-fA-F]{6}$/, "Choose a valid color");
+const boardBackground = z.union([color, z.string().regex(/^linear-gradient\((?:to (?:right|left|top|bottom), )?(?:#[0-9a-fA-F]{6} \d{1,3}%, ){1,3}#[0-9a-fA-F]{6}(?: \d{1,3}%)?\)$/)]);
 const boardBackgroundImage = z.string().max(2048).refine((value) => {
-  if (value.startsWith("https://")) return z.string().url().safeParse(value).success;
+  if (/^https:\/\//i.test(value)) {
+    try { const url = new URL(value); return url.protocol === "https:" && Boolean(url.hostname); } catch { return false; }
+  }
   const match = /^\/api\/board-backgrounds\/[a-zA-Z0-9_-]+\.(?:jpg|png|webp)\?boardId=([^?]+)$/.exec(value);
   return match !== null && z.string().cuid().safeParse(match[1]).success;
 });
@@ -24,7 +27,8 @@ export const boardMemberRoleSchema = z.object({
 export const createBoardSchema = z.object({
   workspaceId: z.string().cuid(),
   title: name,
-  backgroundColor: color.default("#2563eb"),
+  backgroundColor: boardBackground.default("#2563eb"),
+  backgroundImage: boardBackgroundImage.optional(),
 });
 export const updateBoardSchema = z.object({
   title: name.optional(),

@@ -13,17 +13,6 @@ export const cardVisibilitySchema = z.object({
 export const commentVisibilitySchema = z.object({
   body: z.string().trim().min(1).max(10000),
   visibility: z.enum(["INTERNAL", "CLIENT"]).optional(),
-  clientKey: z.string().min(1).max(200).optional(),
-  sharedWithAllClients: z.boolean().optional(),
-}).strict();
-
-export const cardClientShareSchema = z.object({
-  clientUserIds: z.array(z.string().cuid()).max(100),
-}).strict();
-
-export const clientItemScopeSchema = z.object({
-  clientKey: z.string().min(1).max(200).nullable().optional(),
-  sharedWithAllClients: z.boolean().optional(),
 }).strict();
 
 export const approvalActionSchema = z.discriminatedUnion("action", [
@@ -46,8 +35,6 @@ export const designPinCreateSchema = z.object({
   body: z.string().trim().min(1).max(5000),
   x: z.number().finite().min(0).max(100),
   y: z.number().finite().min(0).max(100),
-  clientKey: z.string().min(1).max(200).nullable().optional(),
-  sharedWithAllClients: z.boolean().optional(),
 }).strict();
 
 export const designPinUpdateSchema = z.object({

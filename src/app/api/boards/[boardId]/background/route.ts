@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { storeBoardBackground } from "@/lib/storage";
 import { prisma } from "@/lib/prisma";
 import { canManageWorkspace, getBoardAccess, isResponse } from "@/lib/workspaces";
 
@@ -61,10 +62,9 @@ export async function POST(
   const directory = process.env.FLOWBOARD_BOARD_BACKGROUND_DIR
     ? path.resolve(process.env.FLOWBOARD_BOARD_BACKGROUND_DIR)
     : path.join(process.cwd(), "uploads", "board-backgrounds");
-  await mkdir(directory, { recursive: true });
   const fileName = `${access.userId}-${randomUUID()}${extension}`;
   const uploadedPath = path.join(directory, fileName);
-  await writeFile(uploadedPath, bytes, { flag: "wx" });
+  await storeBoardBackground(fileName, bytes, file.type, uploadedPath);
   const backgroundImage = `/api/board-backgrounds/${fileName}?boardId=${params.boardId}`;
   try {
     const board = await prisma.$transaction(async (tx) => {
@@ -86,7 +86,7 @@ export async function POST(
     });
     return NextResponse.json({ board });
   } catch (error) {
-    await unlink(uploadedPath);
+    if (!process.env.S3_ENDPOINT) await unlink(uploadedPath).catch(() => undefined);
     throw error;
   }
 }

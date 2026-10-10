@@ -11,20 +11,17 @@ export async function GET(
 ) {
   const attachment = await prisma.attachment.findUnique({
     where: { id: params.attachmentId },
-    select: { id: true, cardId: true, url: true, mimeType: true, name: true, clientKey: true, sharedWithAllClients: true },
+    select: { id: true, cardId: true, url: true, mimeType: true, name: true },
   });
   if (!attachment) return NextResponse.json({ error: "Attachment not found" }, { status: 404 });
-  const access = await getCardActorAccess(attachment.cardId, _request);
+  const access = await getCardActorAccess(attachment.cardId);
   if (isCardActorResponse(access)) return access;
-  if (access.role === "CLIENT" && !(
-    attachment.clientKey === access.clientKey || attachment.sharedWithAllClients
-  )) return NextResponse.json({ error: "Attachment not found" }, { status: 404 });
 
   if (attachment.mimeType === "text/uri-list") {
     return NextResponse.json({ error: "Link attachments open at their saved URL" }, { status: 400 });
   }
   const isS3 = Boolean(process.env.S3_ENDPOINT);
-  if (isS3 && !access.shareToken) return NextResponse.redirect(await getAttachmentUrl(attachment.url));
+  if (isS3) return NextResponse.redirect(await getAttachmentUrl(attachment.url));
   try {
     const bytes = await readStoredAttachment(attachment.url);
     const mimeType = attachment.mimeType ?? "application/octet-stream";

@@ -8,49 +8,40 @@ import { getCardActorAccess, isCardActorResponse } from "@/lib/client-card-acces
 export const runtime = "nodejs";
 type Context = { params: { attachmentId: string } };
 
-async function versionAccess(attachmentId: string, request: Request) {
+async function versionAccess(attachmentId: string) {
   const attachment = await prisma.attachment.findUnique({
     where: { id: attachmentId },
-    select: { id: true, cardId: true, type: true, isCover: true, versionGroupId: true, clientKey: true, sharedWithAllClients: true, card: { select: { id: true, boardId: true, visibility: true } } },
+    select: { id: true, cardId: true, type: true, isCover: true, versionGroupId: true, card: { select: { id: true, boardId: true, visibility: true } } },
   });
   if (!attachment || attachment.type !== "IMAGE") return { response: NextResponse.json({ error: "Image attachment not found" }, { status: 404 }) };
-  const access = await getCardActorAccess(attachment.cardId, request);
+  const access = await getCardActorAccess(attachment.cardId);
   if (isCardActorResponse(access)) return { response: access };
-  if (access.role === "CLIENT" && (
-    attachment.card.visibility !== "CLIENT_VISIBLE" ||
-    (attachment.clientKey !== access.clientKey && !attachment.sharedWithAllClients)
-  )) return { response: NextResponse.json({ error: "Image not found" }, { status: 404 }) };
+  if (access.role === "CLIENT" && attachment.card.visibility !== "CLIENT_VISIBLE") return { response: NextResponse.json({ error: "Image not found" }, { status: 404 }) };
   if (!canEditContent(access.role) && access.role !== "CLIENT") return { response: NextResponse.json({ error: "Viewers cannot manage versions" }, { status: 403 }) };
-  return { attachment, access, actorLabel: access.actorLabel };
+  return { attachment, access };
 }
 
 export async function GET(request: Request, { params }: Context) {
-  const result = await versionAccess(params.attachmentId, request);
+  const result = await versionAccess(params.attachmentId);
   if ("response" in result) return result.response;
   const groupId = result.attachment.versionGroupId ?? result.attachment.id;
   const versions = await prisma.attachment.findMany({
     where: {
       AND: [
         { OR: [{ id: groupId }, { versionGroupId: groupId }] },
-        ...(result.access.role === "CLIENT" ? [{
-          OR: [
-          { clientKey: result.access.clientKey },
-          { sharedWithAllClients: true },
-          ],
-        }] : []),
       ],
+    },
     orderBy: { versionNumber: "asc" },
     select: { id: true, name: true, versionNumber: true, isCurrentVersion: true, createdAt: true },
   });
-  const share = result.access.shareToken;
   return NextResponse.json({ versions: versions.map((version) => ({
     ...version,
-    ...(share ? { url: `/api/attachments/${version.id}/file?share=${share}` } : {}),
+    url: `/api/attachments/${version.id}/file`,
   })) });
 }
 
 export async function POST(request: Request, { params }: Context) {
-  const result = await versionAccess(params.attachmentId, request);
+  const result = await versionAccess(params.attachmentId);
   if ("response" in result) return result.response;
   const form = await request.formData().catch(() => null);
   const file = form?.get("file");
@@ -83,8 +74,6 @@ export async function POST(request: Request, { params }: Context) {
         data: {
           cardId: result.attachment.cardId,
           uploadedById: result.access.userId,
-          clientKey: result.access.role === "CLIENT" ? result.access.clientKey : result.attachment.clientKey,
-          sharedWithAllClients: result.attachment.sharedWithAllClients,
           type: "IMAGE",
           name: stored.name,
           url: stored.key,
@@ -108,22 +97,18 @@ export async function POST(request: Request, { params }: Context) {
           boardId: result.attachment.card.boardId,
           cardId: result.attachment.card.id,
           actorId: result.access.userId,
-          actorLabel: result.actorLabel,
           entityType: "CARD",
           entityId: result.attachment.card.id,
           action: "DESIGN_VERSION_ADDED",
-          clientKey: result.access.role === "CLIENT" ? result.access.clientKey : result.attachment.clientKey,
-          sharedWithAllClients: result.attachment.sharedWithAllClients,
           metadata: { attachmentId: created.id, versionNumber: created.versionNumber },
         },
       });
       return created;
     });
-    const share = result.access.shareToken;
     return NextResponse.json({
       version: {
         ...version,
-        ...(share ? { url: `/api/attachments/${version.id}/file?share=${share}` } : {}),
+        url: `/api/attachments/${version.id}/file`,
       },
     }, { status: 201 });
   } catch (error) {
@@ -137,7 +122,7 @@ export async function POST(request: Request, { params }: Context) {
 }
 
 export async function PATCH(request: Request, { params }: Context) {
-  const result = await versionAccess(params.attachmentId, request);
+  const result = await versionAccess(params.attachmentId);
   if ("response" in result) return result.response;
   if (result.access.role === "CLIENT") return NextResponse.json({ error: "Clients cannot change the selected version" }, { status: 403 });
   const parsed = attachmentVersionSelectSchema.safeParse(await request.json().catch(() => null));

@@ -27,6 +27,7 @@ export async function POST(request: Request) {
       workspaceId: parsed.data.workspaceId,
       title: parsed.data.title,
       backgroundColor: parsed.data.backgroundColor,
+      backgroundImage: parsed.data.backgroundImage,
       members: { create: { userId: access.userId, role: "ADMIN" } },
     },
   });

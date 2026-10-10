@@ -115,12 +115,13 @@ export async function PATCH(request: Request, { params }: Context) {
 }
 
 export async function GET(request: Request, { params }: Context) {
-  const access = await getCardActorAccess(params.cardId, request);
+  const access = await getCardActorAccess(params.cardId);
   if (isCardActorResponse(access)) return access;
   const card = await prisma.card.findUnique({
     where: { id: params.cardId },
     include: {
       labels: { include: { label: true } },
+      customValues: { where: { customField: { name: { not: { startsWith: "[Archived]" } } } }, select: { customFieldId: true, value: true } },
       members: {
         include: {
           user: { select: { id: true, name: true, email: true, image: true } },
@@ -166,6 +167,7 @@ export async function GET(request: Request, { params }: Context) {
   if (!card || (access.role === "CLIENT" && card.visibility !== "CLIENT_VISIBLE")) {
     return NextResponse.json({ error: "Card not found" }, { status: 404 });
   }
+  const customFields = access.role === "CLIENT" ? [] : await prisma.customField.findMany({ where: { boardId: access.board.id, name: { not: { startsWith: "[Archived]" } } }, orderBy: { position: "asc" } });
   if (access.role === "CLIENT") {
     return NextResponse.json({
       card: {
@@ -187,6 +189,7 @@ export async function GET(request: Request, { params }: Context) {
         isWatching: false,
         subtasks: [],
         labels: [],
+        customValues: [],
         members: [],
         checklists: [],
         list: card.list,
@@ -195,7 +198,7 @@ export async function GET(request: Request, { params }: Context) {
           ...attachment,
           url: attachment.type === "LINK"
             ? attachment.url
-            : `/api/attachments/${attachment.id}/file${access.shareToken ? `?share=${access.shareToken}` : ""}`,
+            : `/api/attachments/${attachment.id}/file`,
           uploadedBy: null,
         })),
         comments: card.comments.map((comment) => ({
@@ -205,7 +208,7 @@ export async function GET(request: Request, { params }: Context) {
         activities: card.activities,
       },
       boardMembers: [],
-      clients: [],
+      customFields: [],
       targetBoards: [],
       currentUserId: access.userId,
       role: access.role,
@@ -216,11 +219,6 @@ export async function GET(request: Request, { params }: Context) {
     select: {
       user: { select: { id: true, name: true, email: true, image: true } },
     },
-    orderBy: { joinedAt: "asc" },
-  });
-  const clients = await prisma.boardMember.findMany({
-    where: { boardId: access.board.id, role: "CLIENT" },
-    select: { user: { select: { id: true, name: true, email: true, image: true } } },
     orderBy: { joinedAt: "asc" },
   });
   const targetBoards = await prisma.board.findMany({
@@ -268,6 +266,7 @@ export async function GET(request: Request, { params }: Context) {
     card: {
       ...card,
       labels: card?.labels.map(({ label }) => label) ?? [],
+      customValues: card?.customValues ?? [],
       members: card?.members.map(({ user }) => user) ?? [],
       isWatching: card?.watchers.some(({ userId }) => userId === access.userId) ?? false,
       createdBy: createdActivity?.actor ?? null,
@@ -280,8 +279,8 @@ export async function GET(request: Request, { params }: Context) {
       comments: card?.comments ?? [],
     },
     boardMembers: boardMembers.map(({ user }) => user),
+    customFields,
     targetBoards,
-    clients: clients.map(({ user }) => user),
     currentUserId: access.userId,
     role: access.role,
   });

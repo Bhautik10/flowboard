@@ -1,37 +1,34 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { ArrowRight, CalendarClock, CircleCheck, Clock3, Star } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/current-user";
+import { prisma } from "@/lib/prisma";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DashboardQuickActions } from "@/components/workspaces/dashboard-quick-actions";
 
 export default async function HomePage() {
   const user = await getCurrentUser();
-
-  return (
-    <div className="mx-auto max-w-3xl space-y-8">
-      <div className="rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-700 p-8 text-white shadow">
-        <p className="text-sm font-medium text-white/75">Your project hub</p>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight">
-          Welcome{user?.name ? `, ${user.name.split(" ")[0]}` : ""}
-        </h1>
-        <p className="mt-3 max-w-xl text-white/85">
-          Organize work into boards, lists, and cards. Choose a board from your
-          workspace sidebar, or create a new workspace to get started.
-        </p>
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Your FlowBoard</CardTitle>
-          <CardDescription>Workspaces and boards are available in the sidebar.</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-3">
-          <p className="flex-1 text-sm text-muted-foreground">
-            Create boards, invite teammates, and organize tasks into lists and cards.
-          </p>
-          <Button asChild variant="outline">
-            <Link href="/profile">Manage profile</Link>
-          </Button>
-        </CardContent>
-      </Card>
-    </div>
-  );
+  if (!user?.id) return null;
+  const clientMembership = await prisma.workspaceMember.findFirst({ where: { userId: user.id, role: "CLIENT" }, select: { id: true } });
+  if (clientMembership) redirect("/shared-with-me");
+  const [memberships, assigned, activities] = await Promise.all([
+    prisma.workspaceMember.findMany({ where: { userId: user.id, workspace: { archivedAt: null } }, select: { role: true, workspace: { select: { id: true, name: true, boards: { where: { archivedAt: null }, select: { id: true, title: true, backgroundColor: true, backgroundImage: true, updatedAt: true, favorites: { where: { userId: user.id }, select: { userId: true } } }, orderBy: { updatedAt: "desc" } } } } } }),
+    prisma.card.findMany({ where: { archivedAt: null, isComplete: false, members: { some: { userId: user.id } }, dueDate: { not: null, lte: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) }, list: { board: { archivedAt: null, workspace: { members: { some: { userId: user.id } } } } } }, select: { id: true, title: true, dueDate: true, list: { select: { title: true, board: { select: { id: true, title: true } } } } }, orderBy: { dueDate: "asc" }, take: 6 }),
+    prisma.activity.findMany({ where: { actorId: user.id, board: { workspace: { members: { some: { userId: user.id } } } } }, select: { id: true, action: true, createdAt: true, board: { select: { id: true, title: true } }, card: { select: { id: true, title: true } } }, orderBy: { createdAt: "desc" }, take: 5 }),
+  ]);
+  const boards = memberships.flatMap((m) => m.workspace.boards.map((b) => ({ ...b, workspaceName: m.workspace.name })));
+  const starred = boards.filter((b) => b.favorites.length > 0).slice(0, 4);
+  const recent = [...boards].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()).slice(0, 4);
+  const manageable = memberships.some((m) => m.role === "OWNER" || m.role === "ADMIN");
+  const firstName = user.name?.trim().split(/\s+/)[0];
+  const greeting = new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening";
+  function BoardGrid({ items, empty }: { items: typeof boards; empty: string }) {
+    if (!items.length) return <div className="rounded-xl border border-dashed bg-background/60 p-6 text-sm text-muted-foreground">{empty}</div>;
+    return <div className="grid gap-3 sm:grid-cols-2">{items.map((board) => <Link key={board.id} href={`/boards/${board.id}`} className="group relative flex min-h-28 flex-col justify-between overflow-hidden rounded-xl border p-4 text-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md" style={{ backgroundColor: board.backgroundColor ?? "#2563eb", backgroundImage: board.backgroundImage ? `linear-gradient(135deg,rgba(15,23,42,.35),rgba(15,23,42,.72)),url(\"${board.backgroundImage.replace(/[\"\\]/g, "") }\")` : undefined, backgroundSize: "cover", backgroundPosition: "center" }}><span className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" /><span className="relative text-xs text-white/80">{board.workspaceName}</span><span className="relative flex items-center justify-between font-semibold">{board.title}<ArrowRight className="h-4 w-4 opacity-0 transition group-hover:opacity-100" /></span></Link>)}</div>;
+  }
+  return <div className="mx-auto max-w-6xl space-y-8">
+      <section className="rounded-2xl bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-700 p-6 text-white shadow-sm sm:p-8"><p className="text-sm font-medium text-white/75">Your project hub</p><h1 className="mt-2 text-3xl font-bold tracking-tight">{greeting}{firstName ? `, ${firstName}` : ""}</h1><p className="mt-2 text-white/80">Here’s what’s happening across your workspaces.</p><DashboardQuickActions canCreateBoard={manageable} /></section>
+    <div className="grid gap-8 lg:grid-cols-[1.5fr_1fr]"><div className="space-y-8"><section><div className="mb-3 flex items-center justify-between"><h2 className="text-lg font-semibold">Recent boards</h2><Link href="#workspaces" className="text-sm text-primary hover:underline">All boards</Link></div><BoardGrid items={recent} empty="Your recently opened boards will show up here. Choose a workspace to get started." /></section><section><h2 className="mb-3 flex items-center gap-2 text-lg font-semibold"><Star className="h-4 w-4 text-amber-500" />Starred boards</h2><BoardGrid items={starred} empty="Star boards you use often and they’ll be easy to find here." /></section><section id="workspaces" className="rounded-xl border bg-card p-5"><h2 className="font-semibold">Your workspaces</h2><p className="mt-1 text-sm text-muted-foreground">Create a board or workspace from the + button in the sidebar.</p>{memberships.length === 0 && <p className="mt-4 text-sm text-muted-foreground">You haven’t joined a workspace yet.</p>}</section></div><div className="space-y-8"><Card><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><CalendarClock className="h-5 w-5 text-primary" />My cards</CardTitle></CardHeader><CardContent className="space-y-3">{assigned.length ? assigned.map((card) => <Link key={card.id} href={`/boards/${card.list.board.id}`} className="block rounded-lg border p-3 transition hover:bg-muted/60"><span className="font-medium">{card.title}</span><span className="mt-1 block text-xs text-muted-foreground">{card.list.board.title} · {card.list.title}</span><span className={`mt-2 block text-xs ${card.dueDate && card.dueDate < new Date() ? "text-destructive" : "text-muted-foreground"}`}>{card.dueDate?.toLocaleDateString(undefined, { month: "short", day: "numeric" })}{card.dueDate && card.dueDate < new Date() ? " · Overdue" : " · Due soon"}</span></Link>) : <div className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground"><CircleCheck className="mx-auto mb-2 h-5 w-5" />No assigned cards due soon.</div>}<Button asChild variant="ghost" size="sm" className="w-full"><Link href="/my-cards">View all my cards</Link></Button></CardContent></Card><Card><CardHeader><CardTitle className="flex items-center gap-2 text-lg"><Clock3 className="h-5 w-5 text-primary" />Recent activity</CardTitle></CardHeader><CardContent>{activities.length ? <ul className="space-y-4">{activities.map((activity) => <li key={activity.id} className="border-l-2 border-primary/20 pl-3"><p className="text-sm">{activity.action.replaceAll("_", " ").toLowerCase()} {activity.card ? <Link className="font-medium hover:underline" href={`/boards/${activity.board?.id}`}>{activity.card.title}</Link> : activity.board ? <Link className="font-medium hover:underline" href={`/boards/${activity.board.id}`}>{activity.board.title}</Link> : ""}</p><time className="text-xs text-muted-foreground">{activity.createdAt.toLocaleDateString()}</time></li>)}</ul> : <p className="text-sm text-muted-foreground">Activity from your workspaces will appear here as you collaborate.</p>}</CardContent></Card></div></div>
+  </div>;
 }

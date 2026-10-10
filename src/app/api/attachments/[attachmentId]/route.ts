@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { attachmentStorageKey, deleteStoredAttachment } from "@/lib/storage";
 import { canEditContent, getBoardAccess, isResponse } from "@/lib/workspaces";
+import { isMissingTableError } from "@/lib/prisma-errors";
 
 type Context = { params: { attachmentId: string } };
 
@@ -18,8 +19,15 @@ async function authorizedAttachment(attachmentId: string) {
   if (!card) return { response: NextResponse.json({ error: "Attachment not found" }, { status: 404 }) };
   const access = await getBoardAccess(card.boardId);
   if (isResponse(access)) return { response: access };
-  if (access.role === "CLIENT" && card.visibility !== "CLIENT_VISIBLE") {
-    return { response: NextResponse.json({ error: "Attachment not found" }, { status: 404 }) };
+  if (access.role === "CLIENT") {
+    if (card.visibility !== "CLIENT_VISIBLE") return { response: NextResponse.json({ error: "Attachment not found" }, { status: 404 }) };
+    try {
+      const share = await prisma.cardClient.findUnique({ where: { cardId_clientUserId: { cardId: attachment.cardId, clientUserId: access.userId } }, select: { id: true } });
+      if (!share) return { response: NextResponse.json({ error: "Attachment not found" }, { status: 404 }) };
+    } catch (error) {
+      if (isMissingTableError(error, "CardClient")) return { response: NextResponse.json({ error: "Client card sharing is not available until the database migration is applied." }, { status: 503 }) };
+      throw error;
+    }
   }
   return { attachment, card, access };
 }

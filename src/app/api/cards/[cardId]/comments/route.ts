@@ -11,7 +11,7 @@ export async function POST(
   { params }: { params: { cardId: string } },
 ) {
   try {
-    const access = await getCardActorAccess(params.cardId, request);
+    const access = await getCardActorAccess(params.cardId);
     if (isCardActorResponse(access)) return access;
     if (!canCommentCard(access.role, access.cardVisibility)) {
       return NextResponse.json({ error: "You cannot comment on this card" }, { status: 403 });
@@ -27,7 +27,7 @@ export async function POST(
         data: {
           cardId: params.cardId,
           authorId: access.userId,
-          authorLabel: access.actorLabel,
+          authorLabel: null,
           body: parsed.data.body,
           visibility: visibleToClient ? "CLIENT" : "INTERNAL",
         },
@@ -41,7 +41,6 @@ export async function POST(
           boardId: access.board.id,
           cardId: params.cardId,
           actorId: access.userId,
-          actorLabel: access.actorLabel,
           entityType: "COMMENT",
           entityId: created.id,
           action: "COMMENT_ADDED",

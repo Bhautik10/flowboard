@@ -111,7 +111,7 @@ export async function POST(request: Request, { params }: Context) {
           data: {
             cardId: result.card.id,
             authorLabel: actorLabel,
-            body: parsed.data.body,
+            body: typeof parsed.data.body === "string" ? parsed.data.body : "",
             visibility: "CLIENT",
           },
           select: { id: true, body: true, createdAt: true, authorLabel: true },
