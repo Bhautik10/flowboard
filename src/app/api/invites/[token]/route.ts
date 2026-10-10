@@ -1,16 +1,21 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import { prisma } from "@/lib/prisma";
+import { getWorkspaceMemberLimitError } from "@/lib/billing";
+import { z } from "zod";
 
 type Context = { params: { token: string } };
+const tokenSchema = z.string().min(32).max(128).regex(/^[a-f0-9]+$/i);
 
 export async function GET(_request: Request, { params }: Context) {
+  const tokenResult = tokenSchema.safeParse(params.token);
+  if (!tokenResult.success) return NextResponse.json({ error: "Invalid invitation token" }, { status: 400 });
   const user = await getCurrentUser();
   if (!user?.id) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
   const invite = await prisma.workspaceInvite.findUnique({
-    where: { token: params.token },
+    where: { token: tokenResult.data },
     select: {
       email: true,
       role: true,
@@ -29,12 +34,14 @@ export async function GET(_request: Request, { params }: Context) {
 }
 
 export async function POST(_request: Request, { params }: Context) {
+  const tokenResult = tokenSchema.safeParse(params.token);
+  if (!tokenResult.success) return NextResponse.json({ error: "Invalid invitation token" }, { status: 400 });
   const user = await getCurrentUser();
   if (!user?.id || !user.email) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
   const invite = await prisma.workspaceInvite.findUnique({
-    where: { token: params.token },
+    where: { token: tokenResult.data },
     select: {
       id: true,
       email: true,
@@ -49,6 +56,14 @@ export async function POST(_request: Request, { params }: Context) {
   }
   if (user.email.toLowerCase() !== invite.email) {
     return NextResponse.json({ error: "Sign in with the invited email address" }, { status: 403 });
+  }
+  const existingMember = await prisma.workspaceMember.findUnique({
+    where: { workspaceId_userId: { workspaceId: invite.workspaceId, userId: user.id } },
+    select: { role: true },
+  });
+  if (!existingMember || (existingMember.role === "CLIENT" && invite.role !== "CLIENT")) {
+    const limitError = await getWorkspaceMemberLimitError(invite.workspaceId, invite.role, invite.email);
+    if (limitError) return NextResponse.json({ error: limitError }, { status: 403 });
   }
   await prisma.$transaction([
     prisma.workspaceMember.upsert({

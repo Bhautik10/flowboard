@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getBoardAccess, isResponse } from "@/lib/workspaces";
+import { getWorkspaceBillingEntitlements } from "@/lib/billing";
 import { isMissingTableError } from "@/lib/prisma-errors";
 
 type Context = { params: { cardId: string } };
@@ -13,6 +14,8 @@ async function cardAccess(cardId: string) {
   const access = await getBoardAccess(card.boardId);
   if (isResponse(access)) return { response: access };
   if (!["OWNER", "ADMIN", "MEMBER"].includes(access.role)) return { response: NextResponse.json({ error: "You cannot share cards" }, { status: 403 }) };
+  const entitlements = await getWorkspaceBillingEntitlements(access.board.workspaceId);
+  if (!entitlements.clientSharing) return { response: NextResponse.json({ error: "Client card sharing is included with the Agency plan." }, { status: 403 }) };
   return { card, access };
 }
 

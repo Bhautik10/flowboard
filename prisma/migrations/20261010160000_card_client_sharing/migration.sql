@@ -1,4 +1,4 @@
-﻿CREATE TABLE "CardClient" (
+CREATE TABLE "CardClient" (
   "id" TEXT NOT NULL,
   "cardId" TEXT NOT NULL,
   "clientUserId" TEXT NOT NULL,

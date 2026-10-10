@@ -5,7 +5,7 @@ export default function SignUpPage() {
   return (
     <AuthShell
       title="Create your FlowBoard account"
-      description="Free to start. Upgrade when your team grows."
+      description="Get your projects organized and keep your team moving."
     >
       <SignUpForm />
     </AuthShell>

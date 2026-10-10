@@ -163,6 +163,12 @@ are implemented with the existing `TimeEntry` model. `npx tsc --noEmit` and `npm
   create workspace/board (with color/gradient picker), change-own-email with verification,
   fix online background image URL not rendering (quote url(), CSP/remotePatterns), client "Send comment"
   box must allow a plain comment without choosing approval.
+- Billing uses Paddle checkout and signed webhooks with additive billing tables. Its migration is
+  pending; do not run `migrate deploy` while the earlier CardClient migration is blocked by fix-pass
+  item 5, because deploy applies pending migrations in order. The owner reported a failed attempt of
+  `20261010160000_card_client_sharing` (P3018): its SQL began with a UTF-8 BOM, causing PostgreSQL to
+  reject `CREATE` at position 0. The BOM has been removed locally. The database migration is still
+  failed/unapplied; resolve it as rolled back and retry deployment only after item 5 is complete and tested.
 - Local uploads (`public/uploads`) break on other computers and Vercel. Cloud storage (R2/S3/Cloudinary)
   is needed before deploy.
 - Migration history has one odd migration `..._npm_run_dev` that drops an index that never existed; that is
@@ -198,6 +204,8 @@ Current task: fix pass item 5. Complete the client-sharing flow before starting 
 - 2026-10-10: Implemented Phase 7.2 time tracking using existing `TimeEntry` records. TypeScript passes;
   build verification is pending because Prisma generation cannot replace its Windows engine DLL (EPERM).
   No schema or migration changes.
+- 2026-10-10: Added Paddle subscription checkout, signed webhook processing, current-plan pages, and
+  additive billing tables. Billing migration is unapplied while the earlier CardClient migration is pending.
 
 ---
 

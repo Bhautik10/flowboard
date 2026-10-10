@@ -22,6 +22,7 @@ const authConfig = {
         nextUrl.pathname.startsWith("/client/") ||
         nextUrl.pathname.startsWith("/api/client-portal/") ||
         nextUrl.pathname === "/api/cron/due-soon" ||
+        nextUrl.pathname === "/api/billing/webhook" ||
         nextUrl.pathname === "/api/notifications" ||
         nextUrl.pathname.startsWith("/api/notifications/") ||
         nextUrl.pathname === "/api/settings/notifications" ||

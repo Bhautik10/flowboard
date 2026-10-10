@@ -173,6 +173,8 @@ model User {
   templatesCreated    Template[]
   clientSharesCreated ClientShareLink[] @relation("ClientShareCreator")
   designPins          DesignPin[]
+  subscription        Subscription?
+  billingCheckouts    BillingCheckout[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -805,4 +807,42 @@ model Template {
 
   @@index([scope])
   @@index([workspaceId])
+}
+
+model Subscription {
+  id                     String   @id @default(cuid())
+  userId                 String   @unique
+  providerSubscriptionId String   @unique
+  providerCustomerId     String
+  planKey                String
+  priceId                String
+  status                 String
+  currentPeriodEnd       DateTime?
+  cancelAtPeriodEnd      Boolean  @default(false)
+  lastEventAt            DateTime
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([status, currentPeriodEnd])
+}
+
+model BillingCheckout {
+  id                    String    @id @default(cuid())
+  userId                String
+  providerTransactionId String    @unique
+  planKey               String
+  priceId               String
+  processedAt           DateTime?
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt             DateTime  @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model BillingWebhookEvent {
+  eventId     String   @id
+  eventType   String
+  occurredAt  DateTime
+  processedAt DateTime @default(now())
 }

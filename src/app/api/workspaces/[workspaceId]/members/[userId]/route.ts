@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { WorkspaceRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { getWorkspaceMemberLimitError } from "@/lib/billing";
 import {
   canManageMembers,
   getWorkspaceAccess,
@@ -34,6 +35,14 @@ export async function PATCH(request: Request, { params }: Context) {
     access.role !== WorkspaceRole.OWNER
   ) {
     return NextResponse.json({ error: "Only an owner can assign the Owner role" }, { status: 403 });
+  }
+  const currentTarget = await prisma.workspaceMember.findUnique({
+    where: { workspaceId_userId: { workspaceId: params.workspaceId, userId: params.userId } },
+    select: { role: true, user: { select: { email: true } } },
+  });
+  if (currentTarget?.role === WorkspaceRole.CLIENT && parsed.data.role !== WorkspaceRole.CLIENT) {
+    const limitError = await getWorkspaceMemberLimitError(params.workspaceId, parsed.data.role, currentTarget.user.email);
+    if (limitError) return NextResponse.json({ error: limitError }, { status: 403 });
   }
   try {
     const member = await prisma.$transaction(

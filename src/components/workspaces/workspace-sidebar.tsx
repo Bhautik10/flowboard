@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Home,
   CreditCard,
+  BadgeDollarSign,
   Archive,
   Settings,
   Menu,
@@ -335,6 +336,7 @@ export function WorkspaceSidebar() {
           {!clientOnly && recentOpen && !sidebarCollapsed && recentBoards.map((board) => <Link key={board.id} href={`/boards/${board.id}`} className="ml-6 block truncate rounded px-2 py-1 text-xs hover:bg-muted">{board.title}</Link>)}
           {!clientOnly && <Link href="/archived" title="Archived items" className={cn("flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted", pathname.startsWith("/archived") && "bg-muted font-medium", sidebarCollapsed && "justify-center")}><Archive className="h-4 w-4 shrink-0" />{!sidebarCollapsed && "Archived items"}</Link>}
           {!clientOnly && <Link href="/settings" title="Settings" className={cn("flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted", pathname.startsWith("/settings") && "bg-muted font-medium", sidebarCollapsed && "justify-center")}><Settings className="h-4 w-4 shrink-0" />{!sidebarCollapsed && "Settings"}</Link>}
+          {!clientOnly && <Link href="/plans" title="Plans and billing" className={cn("flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-muted", (pathname.startsWith("/plans") || pathname.startsWith("/billing")) && "bg-muted font-medium", sidebarCollapsed && "justify-center")}><BadgeDollarSign className="h-4 w-4 shrink-0" />{!sidebarCollapsed && "Plans & billing"}</Link>}
         </div>
         {isPending && (
           <div className="space-y-3 p-2" aria-label="Loading workspaces">

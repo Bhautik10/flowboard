@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { hashClientShareToken } from "@/lib/client-portal";
+import { getWorkspaceBillingEntitlements } from "@/lib/billing";
 import { clientShareSchema } from "@/lib/validations/agency";
 import { canManageWorkspace, getBoardAccess, isResponse } from "@/lib/workspaces";
 import { z } from "zod";
@@ -15,6 +16,8 @@ export async function GET(_request: Request, { params }: Context) {
     if (!canManageWorkspace(access.role)) {
       return NextResponse.json({ error: "Only workspace admins can manage client links" }, { status: 403 });
     }
+    const entitlements = await getWorkspaceBillingEntitlements(access.board.workspaceId);
+    if (!entitlements.clientSharing) return NextResponse.json({ error: "Client sharing is included with the Agency plan." }, { status: 403 });
     const links = await prisma.clientShareLink.findMany({
       where: { boardId: params.boardId },
       select: { id: true, clientName: true, clientEmail: true, expiresAt: true, revokedAt: true, createdAt: true },
@@ -37,6 +40,8 @@ export async function POST(request: Request, { params }: Context) {
     if (!canManageWorkspace(access.role)) {
       return NextResponse.json({ error: "Only workspace admins can create client links" }, { status: 403 });
     }
+    const entitlements = await getWorkspaceBillingEntitlements(access.board.workspaceId);
+    if (!entitlements.clientSharing) return NextResponse.json({ error: "Client sharing is included with the Agency plan." }, { status: 403 });
     const parsed = clientShareSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
@@ -86,6 +91,8 @@ export async function DELETE(request: Request, { params }: Context) {
     if (!canManageWorkspace(access.role)) {
       return NextResponse.json({ error: "Only workspace admins can revoke client links" }, { status: 403 });
     }
+    const entitlements = await getWorkspaceBillingEntitlements(access.board.workspaceId);
+    if (!entitlements.clientSharing) return NextResponse.json({ error: "Client sharing is included with the Agency plan." }, { status: 403 });
     const id = new URL(request.url).searchParams.get("id");
     const parsed = z.string().cuid().safeParse(id);
     if (!parsed.success) return NextResponse.json({ error: "A valid share link id is required" }, { status: 400 });

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { WorkspaceRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { getWorkspaceMemberLimitError } from "@/lib/billing";
 import {
   canManageWorkspace,
   getWorkspaceAccess,
@@ -33,6 +34,8 @@ export async function POST(request: Request, { params }: Context) {
   }
 
   const email = parsed.data.email.toLowerCase();
+  const limitError = await getWorkspaceMemberLimitError(params.workspaceId, parsed.data.role, email);
+  if (limitError) return NextResponse.json({ error: limitError }, { status: 403 });
   const existingMember = await prisma.workspaceMember.findFirst({
     where: { workspaceId: params.workspaceId, user: { email } },
     select: { id: true },
